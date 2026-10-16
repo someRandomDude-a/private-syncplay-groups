@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watch party</title>
+<style>body{color:#eee;background:#101116;font:17px system-ui;margin:0}main{max-width:1100px;margin:3rem auto;padding:1rem}video{width:100%;max-height:75vh;background:#000}button,a{font:inherit;padding:.7rem;color:#fff;background:#175b88;border:0;border-radius:5px;cursor:pointer}a{display:inline-block;text-decoration:none}#status{min-height:2em}label{margin:1rem}button:disabled{opacity:.5}</style>
+<script defer src="assets/hls.js"></script><script defer src="assets/guest.js"></script></head>
+<body><main><h1>Watch party</h1><p id="status" role="status">You have been invited to watch a party.</p>
+<p id="actions"><button id="join">Watch as guest</button> <a id="signin">Join with Jellyfin account</a></p>
+<video id="video" playsinline disablepictureinpicture controlslist="nodownload noremoteplayback"></video>
+<p><button id="play" hidden>Enable playback</button><label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="1"></label>
+<button id="leave" hidden>Leave party</button></p>
+<p>You can watch this party only. Playback is controlled by its signed-in members. Guest access ends with the party.</p>
+</main></body></html>

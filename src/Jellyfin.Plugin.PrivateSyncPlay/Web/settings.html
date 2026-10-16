@@ -1,0 +1,57 @@
+<!doctype html><html><head><title>Private SyncPlay</title></head><body>
+<div id="privateSyncPlaySettings" data-role="page" class="page type-interior pluginConfigurationPage">
+<div data-role="content"><div class="content-primary"><form id="pspForm">
+<h2>Private SyncPlay</h2><p>Limits apply server-side. Guest credentials never grant normal Jellyfin access. HTTPS is required for guests.</p>
+<label><input id="EnablePrivateGroups" type="checkbox"> Enable private groups</label><br>
+<label><input id="AllowPublicGroups" type="checkbox"> Allow public groups</label><br>
+<label>Default mode <select id="DefaultMode"><option>Public</option><option>Private</option></select></label><br>
+<label><input id="EnableGuestInvites" type="checkbox"> Enable guest invitations (server-wide master switch)</label><br>
+<label><input id="DefaultGuestPermission" type="checkbox"> Permit guest invitations by default for users</label><br>
+<label>Maximum simultaneous viewers <input id="MaxViewers" type="number" min="1" max="1000"></label><br>
+<label>Maximum uses per invitation <input id="MaxInviteUses" type="number" min="1" max="10000"></label><br>
+<label>Guest reconnect grace (seconds) <input id="GuestLeaseSeconds" type="number" min="10" max="120"></label><br>
+<label>Guest video bitrate cap (kbps) <input id="GuestVideoBitrateKbps" type="number" min="256" max="10000"></label>
+<p>Compatible streams are copied. Required conversion follows Jellyfin's Playback → Transcoding settings, including hardware acceleration.</p>
+<h3>Per-user permissions</h3><p>Inherit uses server settings. Allow never overrides a disabled server-wide capability.</p>
+<div id="pspUsers"></div><br><button type="submit" class="raised button-submit"><span>Save</span></button>
+<p id="pspResult" role="status"></p></form></div></div>
+<script type="text/javascript">
+(function () {
+    'use strict';
+    var id = '09514a9e-f7a0-4c5a-91bc-3a46338298ca';
+    var page = document.querySelector('#privateSyncPlaySettings'), config, rows = [];
+    var bools = ['EnablePrivateGroups','AllowPublicGroups','EnableGuestInvites','DefaultGuestPermission'];
+    var numbers = ['MaxViewers','MaxInviteUses','GuestLeaseSeconds','GuestVideoBitrateKbps'];
+    function select(parent, label, values, current) {
+        var l = document.createElement('label'); l.textContent = label + ' '; parent.appendChild(l);
+        var s = document.createElement('select'); l.appendChild(s);
+        values.forEach(function (v) { var o = document.createElement('option'); o.value = v; o.textContent = v; s.appendChild(o); });
+        s.value = current || 'Inherit'; parent.appendChild(document.createElement('br')); return s;
+    }
+    page.addEventListener('viewshow', async function () {
+        try {
+            config = await ApiClient.getPluginConfiguration(id);
+            bools.forEach(function (k) { page.querySelector('#'+k).checked = config[k]; });
+            numbers.forEach(function (k) { page.querySelector('#'+k).value = config[k]; });
+            page.querySelector('#DefaultMode').value = typeof config.DefaultMode === 'number' ? ['Public','Private'][config.DefaultMode] : config.DefaultMode;
+            var users = await ApiClient.getUsers(), container = page.querySelector('#pspUsers'); container.replaceChildren(); rows = [];
+            users.forEach(function (user) {
+                var settings = (config.Users || []).find(function (u) { return u.UserId.replace(/-/g,'') === user.Id.replace(/-/g,''); }) || {};
+                var section = document.createElement('fieldset'), title = document.createElement('legend'); title.textContent = user.Name; section.appendChild(title); container.appendChild(section);
+                function permission(key, label) { var v = settings[key]; return select(section, label, ['Inherit','Allow','Deny'], typeof v === 'number' ? ['Inherit','Allow','Deny'][v] : v); }
+                rows.push({ id: user.Id, mode: select(section, 'Default creation mode', ['Inherit','Public','Private'], settings.DefaultMode == null ? 'Inherit' : typeof settings.DefaultMode === 'number' ? ['Public','Private'][settings.DefaultMode] : settings.DefaultMode),
+                    public: permission('CreatePublic','Create public groups'), private: permission('CreatePrivate','Create private groups'), guest: permission('GuestInvites','Create guest invitations') });
+            });
+        } catch (error) { page.querySelector('#pspResult').textContent = 'Could not load settings.'; }
+    });
+    page.querySelector('#pspForm').addEventListener('submit', async function (event) {
+        event.preventDefault();
+        bools.forEach(function (k) { config[k] = page.querySelector('#'+k).checked; });
+        numbers.forEach(function (k) { config[k] = Number(page.querySelector('#'+k).value); });
+        config.DefaultMode = page.querySelector('#DefaultMode').value;
+        config.Users = rows.map(function (r) { return { UserId:r.id, DefaultMode:r.mode.value === 'Inherit' ? null : r.mode.value, CreatePublic:r.public.value, CreatePrivate:r.private.value, GuestInvites:r.guest.value }; });
+        try { await ApiClient.updatePluginConfiguration(id, config); page.querySelector('#pspResult').textContent = 'Saved. Guest permission changes revoke affected sessions.'; }
+        catch (error) { page.querySelector('#pspResult').textContent = 'Save failed. Check limits and whether default modes are allowed.'; }
+    });
+})();
+</script></div></body></html>
