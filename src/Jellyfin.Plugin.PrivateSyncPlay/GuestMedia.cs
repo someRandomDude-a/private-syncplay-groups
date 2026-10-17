@@ -7,6 +7,7 @@ using MediaBrowser.Controller.Session;
 using Jellyfin.Database.Implementations.Enums;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using MediaBrowser.Model.Entities;
 
 namespace Jellyfin.Plugin.PrivateSyncPlay;
 
@@ -44,12 +45,20 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
             throw new PartyException(415, "Guest viewing supports local video files only.");
         }
         var position = Math.Max(0, (member.PlayState.PositionTicks ?? 0) / (double)TimeSpan.TicksPerSecond);
+        var source = encoding.Source(video, owner);
+        var available = source.MediaStreams.Where(s => GuestSubtitlePolicy.Allowed(source, s)).ToArray();
+        var selectedIndex = member.PlayState.SubtitleStreamIndex ?? source.DefaultSubtitleStreamIndex ?? -1;
+        var selected = available.FirstOrDefault(s => s.Index == selectedIndex);
+        var burnIndex = selected is not null && GuestSubtitlePolicy.NeedsBurnIn(selected) ? selected.Index : (int?)null;
+        var tracks = available.Where(s => !GuestSubtitlePolicy.NeedsBurnIn(s))
+            .Select(s => new GuestSubtitleTrack(s.Index, (s.Language ?? "Unknown language") + (s.IsForced ? " · forced" : ""), s.Language)).ToArray();
+        var duration = (video.RunTimeTicks ?? 0) / (double)TimeSpan.TicksPerSecond;
         var paused = member.PlayState.IsPaused;
         _jobs.TryGetValue(party.Id, out var job);
         if (paused)
         {
             Stop(party.Id);
-            return new { Playing = true, Paused = true, Title = video.Name, Position = position };
+            return new { Playing = true, Paused = true, Title = video.Name, Position = position, Duration = duration, Offset = job?.Offset ?? position };
         }
         var bitrate = Config.GuestVideoBitrateKbps;
         var options = encoding.Options;
@@ -57,6 +66,7 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
         if (job is not null && job.Process.HasExited && store.Now - job.Started < TimeSpan.FromSeconds(10))
             throw new PartyException(503, "Guest stream failed. Check Jellyfin's transcoding and hardware acceleration settings.");
         if (job is null || job.Item != video.Id || job.Process.HasExited || job.Bitrate != bitrate
+            || job.Plan.BurnedSubtitleIndex != burnIndex
             || job.Plan.SettingsKey != settingsKey
             || Math.Abs(position - (job.Offset + (store.Now - job.Started).TotalSeconds)) > 4)
         {
@@ -66,13 +76,14 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
             EnsureAvailable(party);
             if (_jobs.Count >= Config.MaxGuestStreams)
                 throw new PartyException(503, "The server's guest stream limit has been reached.");
-            var plan = encoding.Build(video, owner, position, bitrate, options);
+            var plan = encoding.Build(video, owner, position, bitrate, options, selectedIndex);
             _retryAfter[party.Id] = store.Now.AddSeconds(5);
             job = Start(party.Id, video, position, bitrate, plan);
             _jobs[party.Id] = job;
             _retryAfter.Remove(party.Id);
         }
-        return new { Playing = true, Paused = false, Title = video.Name, Position = position,
+        return new { Playing = true, Paused = false, Title = video.Name, Position = position, Duration = duration,
+            Subtitles = tracks, SelectedSubtitleIndex = selectedIndex, BurnedSubtitleIndex = burnIndex,
             job.Generation, job.Offset, job.Plan.PlaybackMethod, Ready = File.Exists(Path.Combine(job.Directory, "index.m3u8")) };
     }
 
@@ -128,6 +139,21 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
             return (bytes, name == "index.m3u8" ? "application/vnd.apple.mpegurl" : "video/mp2t");
         }
         catch (IOException) { throw new PartyException(404, "Stream is preparing."); }
+    }
+
+    // Authorization snapshot for asynchronous native subtitle conversion. Caller must revalidate before delivery.
+    public GuestSubtitleRequest Subtitle(Party party, string generation, int index)
+    {
+        EnsureAvailable(party);
+        var owner = CheckOwner(party);
+        if (!_jobs.TryGetValue(party.Id, out var job) || job.Generation != generation) throw new PartyException(404, "Stream unavailable.");
+        var current = PlaybackMember(party);
+        var video = library.GetItemById<Video>(job.Item, owner);
+        if (current?.NowPlayingItem?.Id != job.Item || current.PlayState.IsPaused || video is null) throw new PartyException(410, "Stream ended.");
+        var source = encoding.Source(video, owner);
+        var track = source.MediaStreams.FirstOrDefault(s => s.Index == index && GuestSubtitlePolicy.Allowed(source, s));
+        if (track is null || GuestSubtitlePolicy.NeedsBurnIn(track)) throw new PartyException(404, "Subtitle track unavailable.");
+        return new GuestSubtitleRequest(video, source.Id, index, job.Offset);
     }
 
     public void Reap()
@@ -211,3 +237,6 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
     }
     private sealed record StreamJob(Guid Item, string Generation, string Directory, double Offset, DateTimeOffset Started, int Bitrate, Process Process, GuestEncodingPlan Plan);
 }
+
+public sealed record GuestSubtitleTrack(int Index, string Label, string? Language);
+public sealed record GuestSubtitleRequest(Video Video, string SourceId, int Index, double Offset);

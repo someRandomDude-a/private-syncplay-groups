@@ -13,8 +13,41 @@
 .privateSyncPlayDialog .listItemBody { min-inline-size: 0; overflow-wrap: anywhere; }
 .privateSyncPlayGuest { margin: 0; }
 .privateSyncPlayGuest .privateSyncPlayContent { max-inline-size: 70em; margin-inline: auto; padding: 1.5em; }
-.privateSyncPlayGuest .privateSyncPlayVideo { inline-size: 100%; max-block-size: 70dvh; }
+.privateSyncPlayGuest #videoOsdPage { position: relative; inset: auto; margin: 1em 0; inline-size: 100%; block-size: auto; min-block-size: 18em; aspect-ratio: 16/9; overflow: hidden; }
+.privateSyncPlayGuest .privateSyncPlayVideo { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: contain; }
+.privateSyncPlayPlayer .videoOsdBottom { position: absolute; inset-block-end: 0; inset-inline: 0; }
+.privateSyncPlayPlayer .privateSyncPlayPlayerHeader { position: absolute; inset-block-start: 0; inset-inline: 0; display: flex; align-items: center; padding: .5em; }
+.privateSyncPlayPlayer .osdControls { padding: .5em 1em; }
+.privateSyncPlayPlayer .privateSyncPlayPlayerButtons, .privateSyncPlayPlayer .volumeButtons, .privateSyncPlayPositionRow { display: flex; align-items: center; gap: .5em; }
+.privateSyncPlayPlayer .privateSyncPlayPlayerButtons { flex-wrap: wrap; justify-content: flex-end; }
+.privateSyncPlayPlayer .volumeButtons { margin-inline-end: auto; }
+.privateSyncPlayPlayer .osdVolumeSliderContainer { inline-size: clamp(5em, 15vw, 10em); }
+.privateSyncPlayPlayer .privateSyncPlayProgress { position: relative; flex: 1; block-size: .25em; overflow: hidden; pointer-events: none; }
+.privateSyncPlayPlayer .privateSyncPlayProgress > div { block-size: 100%; inline-size: 0; }
+.privateSyncPlayPlayer .privateSyncPlayEnablePlayback { position: absolute; inset-block-start: 25%; inset-inline-start: 50%; transform: translateX(-50%); }
+.privateSyncPlayGuest #videoOsdPage:fullscreen { margin: 0; inline-size: 100%; block-size: 100%; aspect-ratio: auto; }
+.privateSyncPlayPlayer.privateSyncPlayControlsHidden .videoOsdBottom, .privateSyncPlayPlayer.privateSyncPlayControlsHidden .privateSyncPlayPlayerHeader { opacity: 0; pointer-events: none; }
+.privateSyncPlayPlayer .privateSyncPlayVolumeLabel { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
 .privateSyncPlayGuest [hidden] { display: none !important; }
 .privateSyncPlayGuest .privateSyncPlayActions { display: flex; flex-wrap: wrap; gap: .5em; }
 .privateSyncPlayGuest .privateSyncPlayActions > .emby-button { flex: 1 1 12em; }
-.privateSyncPlaySettings .privateSyncPlayUser { margin-block: 1.5em; }
+.privateSyncPlaySettings .readOnlyContent { max-inline-size: 100%; }
+.privateSyncPlaySettings .privateSyncPlaySettingsEditor { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.privateSyncPlaySettings .privateSyncPlayUserToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .75em; }
+.privateSyncPlaySettings .privateSyncPlayUserToolbar .inputContainer { flex: 1 1 16em; margin-block: .5em; }
+.privateSyncPlaySettings .privateSyncPlayUserToolbar > .emby-button { inline-size: auto; }
+.privateSyncPlaySettings .privateSyncPlayBulkPanel { padding: 1em; }
+.privateSyncPlaySettings .privateSyncPlayBulkField { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16em), 1fr)); gap: 1em; align-items: center; }
+.privateSyncPlaySettings .privateSyncPlayTableScroll { overflow-x: auto; margin-block: 1em; }
+.privateSyncPlaySettings .privateSyncPlayUserTable { min-inline-size: 52em; }
+.privateSyncPlaySettings .privateSyncPlayUserTable caption { text-align: start; padding-block: .5em; }
+.privateSyncPlaySettings .privateSyncPlayUserTable td, .privateSyncPlaySettings .privateSyncPlayUserTable th { vertical-align: middle; }
+.privateSyncPlaySettings .privateSyncPlayUserTable .selectContainer { margin: .4em 0; }
+.privateSyncPlaySettings .privateSyncPlayUserTable .emby-select { min-inline-size: 6.5em; }
+.privateSyncPlaySettings .privateSyncPlayUserTable .selectArrowContainer { inset-block: 0; display: flex; align-items: center; }
+.privateSyncPlaySettings .privateSyncPlayUserTable .selectArrow { margin-block-start: 0; }
+.privateSyncPlaySettings .privateSyncPlaySelectCell { inline-size: 3em; }
+.privateSyncPlaySettings .privateSyncPlaySelectCell .checkboxContainer { margin: .5em; }
+.privateSyncPlaySettings .privateSyncPlayVisuallyHidden, .privateSyncPlaySettings .privateSyncPlaySelectCell .checkboxLabel,
+.privateSyncPlaySettings .privateSyncPlayUserTable .selectLabel { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
+.privateSyncPlaySettings [hidden] { display: none !important; }

@@ -46,8 +46,17 @@ public sealed class FailureContainmentTests
         new ServiceRegistrator().RegisterServices(services, host);
         using var provider = services.BuildServiceProvider();
         Assert.False(provider.GetRequiredService<PluginStatus>().IsAvailable);
-        Assert.Contains("12.x only", provider.GetRequiredService<PluginStatus>().Failure);
+        Assert.Contains("targets Jellyfin", provider.GetRequiredService<PluginStatus>().Failure);
         Assert.Same(engine, provider.GetRequiredService<ISyncPlayManager>());
+    }
+    [Fact] public void OnlyThePinnedLatestServerReleaseIsSupported()
+    {
+        var target = Version.Parse(ServerCompatibility.TargetAbi);
+        Assert.True(ServerCompatibility.Supports(target));
+        Assert.True(ServerCompatibility.Supports(new Version(target.Major, target.Minor)));
+        Assert.False(ServerCompatibility.Supports(new Version(target.Major, target.Minor - 1, 0, 0)));
+        Assert.False(ServerCompatibility.Supports(new Version(target.Major, target.Minor + 1, 0, 0)));
+        Assert.False(ServerCompatibility.Supports(null));
     }
 
     [Fact] public async Task BackgroundDependencyFailureRevokesLeasesAndNeverFaultsHostTask()

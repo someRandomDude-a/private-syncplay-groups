@@ -16,15 +16,31 @@
 <button is="emby-button" id="join" type="button" class="emby-button raised button-submit"><span>Watch as guest</span></button>
 <a is="emby-linkbutton" id="signin" class="emby-button raised"><span>Join with Jellyfin account</span></a>
 </div>
-<video id="video" class="privateSyncPlayVideo" playsinline disablepictureinpicture controlslist="nodownload noremoteplayback"></video>
-<div class="privateSyncPlayActions">
-<button is="emby-button" id="play" type="button" class="emby-button raised button-submit" hidden><span>Enable playback</span></button>
-<button is="emby-button" id="leave" type="button" class="emby-button raised" hidden><span>Leave party</span></button>
+<section id="videoOsdPage" class="page libraryPage privateSyncPlayPlayer" aria-label="Watch party video player" tabindex="0" hidden>
+<video id="video" class="htmlvideoplayer privateSyncPlayVideo" playsinline disablepictureinpicture disableremoteplayback controlslist="nodownload noremoteplayback" tabindex="-1"></video>
+<div class="videoOsdHeader privateSyncPlayPlayerHeader">
+<button is="paper-icon-button-light" id="leave" type="button" class="paper-icon-button-light btnBack autoSize" title="Leave party" aria-label="Leave party"><span class="material-icons arrow_back" aria-hidden="true"></span></button>
+<span class="osdTextContainer">Watch party</span>
 </div>
-<div class="sliderContainer-settings"><label class="sliderLabel" for="volume">Volume</label>
-<div class="mdl-slider-container"><input is="emby-slider" data-embyslider="true" id="volume" class="mdl-slider mdl-js-slider mdl-slider-hoverthumb" type="range" min="0" max="1" step="0.05" value="1">
+<button is="emby-button" id="play" type="button" class="emby-button raised button-submit privateSyncPlayEnablePlayback" hidden><span>Enable playback</span></button>
+<div class="videoOsdBottom videoOsdBottom-maincontrols">
+<div class="osdControls">
+<div class="osdTextContainer osdMainTextContainer"><h2 id="playerStatus" class="osdTitle" role="status" aria-live="polite">Waiting for party…</h2></div>
+<div class="privateSyncPlayPositionRow" dir="ltr"><span id="position" class="osdTextContainer osdPositionText">0:00</span>
+<div id="progress" class="sliderContainer privateSyncPlayProgress" role="progressbar" aria-label="Party playback position (read only)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="mdl-slider-background-lower" id="positionProgress"></div></div>
+<span id="duration" class="osdTextContainer osdDurationText">0:00</span></div>
+<div class="buttons focuscontainer-x privateSyncPlayPlayerButtons">
+<div class="volumeButtons"><button is="paper-icon-button-light" type="button" id="mute" class="paper-icon-button-light buttonMute autoSize" title="Mute (M)" aria-label="Mute" aria-pressed="false"><span id="muteIcon" class="xlargePaperIconButton material-icons volume_up" aria-hidden="true"></span></button>
+<label class="privateSyncPlayVolumeLabel" for="volume">Volume</label><div class="sliderContainer osdVolumeSliderContainer">
+<div class="mdl-slider-container"><input is="emby-slider" data-embyslider="true" id="volume" aria-label="Volume" class="mdl-slider mdl-js-slider mdl-slider-hoverthumb osdVolumeSlider" type="range" min="0" max="1" step="0.05" value="1">
 <div class="mdl-slider-background-flex-container" aria-hidden="true"><div class="mdl-slider-background-flex"><div class="mdl-slider-background-flex-inner">
 <div class="mdl-slider-background-upper"></div><div id="volumeProgress" class="mdl-slider-background-lower"></div>
-</div></div></div></div></div>
-<p class="fieldDescription">You can watch this party only. Playback is controlled by its signed-in members. Guest access ends with the party.</p>
+</div></div></div></div></div></div>
+<button is="paper-icon-button-light" id="subtitlesButton" type="button" class="paper-icon-button-light btnSubtitles autoSize" title="Subtitles (C)" aria-label="Subtitles" aria-expanded="false" aria-controls="subtitleSettings"><span class="xlargePaperIconButton material-icons closed_caption" aria-hidden="true"></span></button>
+<button is="paper-icon-button-light" id="fullscreen" type="button" class="paper-icon-button-light btnFullscreen autoSize" title="Fullscreen (F)" aria-label="Enter fullscreen"><span id="fullscreenIcon" class="xlargePaperIconButton material-icons fullscreen" aria-hidden="true"></span></button>
+</div>
+<div id="subtitleSettings" class="verticalSection" hidden><div class="selectContainer"><label class="selectLabel" for="subtitles">Subtitles</label><select is="emby-select" id="subtitles" class="emby-select emby-select-withcolor"><option value="-1">Off</option></select><div class="selectArrowContainer"><span class="selectArrow material-icons keyboard_arrow_down" aria-hidden="true"></span></div></div>
+<p id="subtitleStatus" class="fieldDescription" role="status"></p></div>
+</div></div></section>
+<p class="fieldDescription">Playback is controlled by the party. Volume, captions and fullscreen affect only your player. Guest access ends with the party.</p>
 </main></body></html>

@@ -15,12 +15,14 @@ public sealed class NativeWebStylesTests
             File.WriteAllText(Path.Combine(root,"index.html"), "<link href=\"main.abc.css?123\" rel=\"stylesheet\"><link href=\"https://evil.example/a.css\" rel=\"stylesheet\"><script src=\"app.js\"></script>");
             File.WriteAllText(Path.Combine(root,"main.abc.css"), ".inputContainer{margin:1em}");
             File.WriteAllText(Path.Combine(root,"checkbox.123.css"), ".checkboxContainer{display:flex}");
+            File.WriteAllText(Path.Combine(root,"table.123.css"), ".detailTable{border-collapse:collapse}");
             File.WriteAllText(Path.Combine(root,"unrelated.css"), ".unrelated{display:none}");
             File.WriteAllText(Path.Combine(root,"themes","light","theme.css"), "html{color:inherit}");
             File.WriteAllText(Path.Combine(root,"config.json"), "{\"themes\":[{\"id\":\"light\",\"default\":true}]}");
             var paths = new Mock<IApplicationPaths>(); paths.SetupGet(p => p.WebPath).Returns(root);
             var styles = new NativeWebStyles(paths.Object);
             Assert.Contains("main.abc.css", styles.Css); Assert.Contains("checkbox.123.css", styles.Css);
+            Assert.Contains("table.123.css", styles.Css);
             Assert.DoesNotContain("evil", styles.Css); Assert.DoesNotContain("app.js", styles.Css); Assert.DoesNotContain("unrelated", styles.Css);
             Assert.Equal("light", styles.Theme); Assert.Contains("themes/light/theme.css", styles.ThemeLink);
         }

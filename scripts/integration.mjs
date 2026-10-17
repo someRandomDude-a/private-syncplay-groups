@@ -7,6 +7,7 @@ import { request as httpsRequest } from 'node:https';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
+import { target } from './jellyfin-target.mjs';
 
 const root = resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || join(tmpdir(), 'opencode', 'private-syncplay-integration-' + Date.now()));
 const withConsumer = process.argv.includes('--with-consumer');
@@ -18,8 +19,8 @@ const resume = process.argv.find(x => x.startsWith('--resume='))?.slice(9);
 if (catalogInstall && resume) throw new Error('Catalog installation test requires a fresh disposable server');
 if (resume && !resume.startsWith('private-syncplay-integration-')) throw new Error('Refusing to reuse an unrelated container');
 const name = resume || 'private-syncplay-integration-' + process.pid;
-const image = process.argv.find(x=>x.startsWith('--image='))?.slice(8) || 'jellyfin/jellyfin:12.2';
-if (!/^jellyfin\/jellyfin:12\.\d+(?:\.\d+)?$/.test(image)) throw new Error('Integration testing supports official stable Jellyfin 12.x images only');
+const image = process.argv.find(x=>x.startsWith('--image='))?.slice(8) || target.image;
+if (image !== target.image) throw new Error(`Only the supported latest Jellyfin image ${target.image} may be tested`);
 const keep = process.argv.includes('--keep');
 function command(exe, args) {
     const result = spawnSync(exe, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -104,8 +105,12 @@ try {
 <EnableHttps>true</EnableHttps><RequireHttps>false</RequireHttps><CertificatePath>/config/test.pfx</CertificatePath>
 <CertificatePassword>test-only</CertificatePassword><InternalHttpPort>8096</InternalHttpPort><InternalHttpsPort>8920</InternalHttpsPort>
 <EnableIPv4>true</EnableIPv4><EnableIPv6>false</EnableIPv6><EnableRemoteAccess>true</EnableRemoteAccess></NetworkConfiguration>`);
+    await writeFile(join(root,'embedded.srt'),'1\n00:00:00,000 --> 00:00:05,000\nEmbedded caption\n\n2\n00:01:00,000 --> 00:01:05,000\nEmbedded caption after seek\n\n3\n00:02:55,000 --> 00:03:00,000\nEnd caption\n');
+    await writeFile(join(root,'media','Party Test.fr.srt'),'1\n00:00:00,000 --> 00:00:05,000\nExternal caption\n\n2\n00:01:00,000 --> 00:01:05,000\nExternal caption after seek\n');
+    await writeFile(join(root,'media','Party Test.de.ass'),'[Script Info]\nScriptType: v4.00+\nPlayResX: 640\nPlayResY: 360\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,DejaVu Sans,28,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:03:00.00,Default,,0,0,0,,Styled party caption\n');
     docker('run', '--rm', '-v', `${root}:/test`, '--entrypoint', '/usr/lib/jellyfin-ffmpeg/ffmpeg', image,
         '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440',
+        '-i','/test/embedded.srt','-map','0:v:0','-map','1:a:0','-map','2:s:0','-c:s','mov_text','-metadata:s:s:0','language=eng',
         '-t', '180', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '/test/media/Party Test.mp4');
     docker('run', '-d', '--name', name, '-p', '127.0.0.1::8096', '-p', '127.0.0.1::8920',
         ...(catalogInstall ? ['--network',network] : []),
@@ -242,6 +247,9 @@ try {
     assert(controlStyles.includes('.emby-checkbox') && controlStyles.includes('.formDialog') && controlStyles.includes('.mdl-slider'),'Native control CSS chunks missing');
     const watch=(await request('PrivateSyncPlay/Watch')).data;
     assert(watch.includes('../Branding/Css') && watch.includes('themes/dark/theme.css') && !watch.includes('<style>'),'Guest player must reuse native theme/branding');
+    assert(watch.includes('videoOsdBottom') && watch.includes('buttonMute') && watch.includes('btnSubtitles') && !watch.includes('btnPause'),'Guest controls must use native player hooks without party transport controls');
+    const account=(await request('PrivateSyncPlay/Account')).data;
+    assert(account.includes('assets/account.js') && !account.includes('privateSyncPlayInvite='));
     console.log('PASS plugin loaded, configuration and bundled web assets');
     const group = (await request('PrivateSyncPlay/Groups', { method:'POST', auth:admin, body:{Name:'Private Test',Mode:1,MaxViewers:3} })).data;
     const me = (await request('PrivateSyncPlay/Me',{auth:admin})).data;
@@ -262,9 +270,7 @@ try {
     await request('PrivateSyncPlay/Guest/State',{guest:true});
     await request('Users/Me',{guest:true,expected:401});
     await request('Items',{guest:true,expected:401});
-    // Jellyfin 12.0 rejects the empty actor in its policy handler with 400; later 12.x uses 401.
-    // Neither response may reveal a group or accept guest control.
-    await request('SyncPlay/List',{guest:true,expected:[400,401]});
+    await request('SyncPlay/List',{guest:true,expected:401});
     await request(`Items?api_key=${invite.token}`,{expected:401});
     await request('PrivateSyncPlay/Guest/State',{guest:true,extraHeaders:{Origin:'https://evil.example'},expected:403});
     await request('PrivateSyncPlay/Guest/State',{guest:true,extraHeaders:{'Sec-Fetch-Site':'same-site'},expected:403});
@@ -279,7 +285,7 @@ try {
     }
     assert(item,'Synthetic movie not scanned');
     await request('SyncPlay/SetNewQueue',{method:'POST',auth:admin,body:{PlayingQueue:[item.id],PlayingItemPosition:0,StartPositionTicks:0},expected:204});
-    await request('Sessions/Playing',{method:'POST',auth:admin,body:{ItemId:item.id,PositionTicks:0,IsPaused:false,CanSeek:true,PlayMethod:'DirectPlay'},expected:204});
+    await request('Sessions/Playing',{method:'POST',auth:admin,body:{ItemId:item.id,PositionTicks:0,IsPaused:false,CanSeek:true,PlayMethod:'DirectPlay',SubtitleStreamIndex:-1},expected:204});
     await request('SyncPlay/Unpause',{method:'POST',auth:admin,expected:204});
     let state;
     for(let i=0;i<30;i++) { state=(await request('PrivateSyncPlay/Guest/State',{guest:true})).data; if(state.ready)break; await wait(1000); }
@@ -292,8 +298,36 @@ try {
     const segment=manifest.split('\n').find(x=>x.startsWith('segment'))?.trim(); assert(segment);
     const bytes=await request(`PrivateSyncPlay/Guest/media/${state.generation}/${segment}`,{guest:true}); assert(bytes.bytes.length>188);
     await request(`PrivateSyncPlay/Guest/media/${state.generation}/secret.ts`,{guest:true,expected:404});
-    await request('SyncPlay/Pause',{method:'POST',guest:true,expected:[400,401]});
+    await request('SyncPlay/Pause',{method:'POST',guest:true,expected:401});
     console.log('PASS real stream-copy HLS manifest/segment, no guest party controls');
+    assert(state.subtitles.length>=2,'Embedded and external text subtitles must be listed without paths');
+    for(const track of state.subtitles) {
+        const captions=(await request(`PrivateSyncPlay/Guest/media/${state.generation}/subtitles/${track.index}.vtt`,{guest:true})).data;
+        assert(captions.startsWith('WEBVTT') && captions.includes('caption'));
+    }
+    await request(`PrivateSyncPlay/Guest/media/${state.generation}/subtitles/999.vtt`,{guest:true,expected:404});
+    await request('PrivateSyncPlay/Guest/media/wrong-generation/subtitles/2.vtt',{guest:true,expected:404});
+    const itemDetails=(await request(`Items/${item.id}?userId=${admin.user.id}&Fields=MediaSources`,{auth:admin})).data;
+    const ass=itemDetails.mediaSources?.flatMap(s=>s.mediaStreams).find(s=>s.type==='Subtitle' && s.codec==='ass');
+    assert(ass,'Styled subtitle fixture must be scanned');
+    async function progress(position,index) {
+        await request('Sessions/Playing/Progress',{method:'POST',auth:admin,body:{ItemId:item.id,PositionTicks:position*10000000,IsPaused:false,CanSeek:true,PlayMethod:'DirectPlay',SubtitleStreamIndex:index},expected:204});
+    }
+    async function readyGuest() {
+        for(let i=0;i<30;i++) { const s=(await request('PrivateSyncPlay/Guest/State',{guest:true})).data; if(s.ready)return s; await wait(1000); }
+        throw new Error('Guest subtitle/media stream did not become ready');
+    }
+    await progress(0,ass.index);
+    const burned=await readyGuest();
+    assert.equal(burned.burnedSubtitleIndex,ass.index); assert.equal(burned.playbackMethod,'Transcode');
+    assert(docker('top',name,'-eo','pid,args').includes('subtitles='),'Styled captions must use native FFmpeg rendering');
+    await progress(60,-1);
+    const sought=await readyGuest();
+    assert.equal(sought.offset,60); assert.equal(sought.playbackMethod,'Remux');
+    const seekCaptions=(await request(`PrivateSyncPlay/Guest/media/${sought.generation}/subtitles/${sought.subtitles[0].index}.vtt`,{guest:true})).data;
+    assert(seekCaptions.includes('00:01:00'),'Text delivery preserves movie timestamps for the player offset adjustment');
+    await progress(0,-1); state=await readyGuest();
+    console.log('PASS embedded/external text subtitles, native styled burn-in, seek offsets and scoped subtitle guards');
     const ownerPolicy=(await request(`Users/${admin.user.id}`,{auth:admin})).data.policy;
     const originalVideoPermission=ownerPolicy.enableVideoPlaybackTranscoding;
     const originalAudioPermission=ownerPolicy.enableAudioPlaybackTranscoding;
@@ -366,6 +400,7 @@ try {
     settings.enableGuestInvites=false;
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
+    await request(`PrivateSyncPlay/Guest/media/${state.generation}/subtitles/${state.subtitles[0].index}.vtt`,{guest:true,expected:401});
     settings.enableGuestInvites=true;
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});

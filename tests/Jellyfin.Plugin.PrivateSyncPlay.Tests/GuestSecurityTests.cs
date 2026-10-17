@@ -41,6 +41,13 @@ public sealed class GuestSecurityTests
         Assert.Equal(401, Assert.Throws<PartyException>(() => Controller().State()).Status);
         Assert.Equal(401, Assert.Throws<PartyException>(() => Controller().Stream("anything", "index.m3u8")).Status);
     }
+    [Fact] public async Task UnknownGuestCannotStartSubtitleConversion()
+    {
+        var encoder = new Mock<ISubtitleEncoder>();
+        using var subtitles = new GuestSubtitles(encoder.Object, TimeProvider.System);
+        Assert.Equal(401, (await Assert.ThrowsAsync<PartyException>(() => Controller().Subtitle("generation", 2, subtitles))).Status);
+        encoder.VerifyNoOtherCalls();
+    }
     [Fact] public void SiblingSubdomainCannotReadGuestStateEvenWithACookie()
     {
         Assert.Equal(403, Assert.Throws<PartyException>(() => Controller(origin: "https://other.party.example").State()).Status);
@@ -56,7 +63,7 @@ public sealed class GuestSecurityTests
     [Fact] public void GuestControllerExposesNoControlOrLibraryRoutes()
     {
         var methods = typeof(GuestController).GetMethods(BindingFlags.Public | BindingFlags.DeclaredOnly | BindingFlags.Instance);
-        Assert.Equal(new[] { "Leave", "Redeem", "State", "Stream" }, methods.Select(m => m.Name).Order().ToArray());
+        Assert.Equal(new[] { "Leave", "Redeem", "State", "Stream", "Subtitle" }, methods.Select(m => m.Name).Order().ToArray());
         Assert.NotNull(typeof(GuestController).GetCustomAttribute<AllowAnonymousAttribute>());
         Assert.DoesNotContain(typeof(ServiceRegistrator).Assembly.GetTypes(), t => t.GetInterfaces().Any(i => i.FullName == "Microsoft.AspNetCore.Authentication.IAuthenticationHandler"));
     }

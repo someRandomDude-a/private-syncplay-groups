@@ -1,4 +1,4 @@
-name: Publish Jellyfin repository
+name: Release plugin and publish Jellyfin catalog
 on:
   push:
     tags: ['v*.*.*']
@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -28,6 +28,11 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Require the current official latest stable release
+        id: server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/jellyfin-versions.mjs
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm run test:ui
@@ -37,18 +42,13 @@ jobs:
       - shell: pwsh
         run: |
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Use an existing vX.Y.Z tag' }
-          ./scripts/package.ps1 -Version $env:RELEASE_TAG.Substring(1) -Repository $env:GITHUB_REPOSITORY -Changelog "Private SyncPlay $env:RELEASE_TAG for Jellyfin 12.x. Release notes: https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:RELEASE_TAG"
+          ./scripts/package.ps1 -Version $env:RELEASE_TAG.Substring(1) -Repository $env:GITHUB_REPOSITORY -Changelog "Private SyncPlay $env:RELEASE_TAG for Jellyfin ${{ steps.server.outputs.latest }}. Release notes: https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:RELEASE_TAG"
       - run: node scripts/validate-package.mjs
       - shell: pwsh
         run: ./tests/catalog-publish.test.ps1
       - shell: pwsh
         run: ./tests/catalog-history.test.ps1
-      - name: Discover latest stable supported Jellyfin 12.x
-        id: server
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/jellyfin-versions.mjs
-      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-release-test" --with-consumer --install-from-catalog --image=jellyfin/jellyfin:${{ steps.server.outputs.latest }}
+      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-release-test" --with-consumer --install-from-catalog --image=${{ steps.server.outputs.image }}
       - shell: pwsh
         run: ./scripts/test-upgrade.ps1 -Directory "${{ runner.temp }}/private-syncplay-upgrade" -Image 'jellyfin/jellyfin:${{ steps.server.outputs.latest }}'
       - uses: actions/upload-artifact@v4
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -107,6 +107,8 @@ jobs:
           $manifest = Join-Path $previous 'manifest.json'
           if (Test-Path $manifest) { ./scripts/merge-catalog.ps1 -Manifest artifacts/manifest.json -PreviousManifest $manifest }
       - run: node scripts/validate-package.mjs
+      - name: Recheck latest server before publishing
+        run: node scripts/jellyfin-versions.mjs
       - name: Publish immutable version release assets
         shell: pwsh
         run: |

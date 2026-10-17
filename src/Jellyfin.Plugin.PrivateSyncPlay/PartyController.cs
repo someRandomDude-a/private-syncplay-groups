@@ -30,7 +30,8 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
             store.Sweep(manager.Config);
             var party = store.ForSession(session.Id);
             var canCreate = manager.Config.CanCreate(session.UserId, GroupMode.Public) || manager.Config.CanCreate(session.UserId, GroupMode.Private);
-            return new { DefaultMode = canCreate ? manager.Config.DefaultFor(session.UserId).ToString() : null,
+            return new { RealtimeReady = session.SessionControllers.Any(c => c.IsSessionActive),
+                DefaultMode = canCreate ? manager.Config.DefaultFor(session.UserId).ToString() : null,
                 CanCreatePublic = manager.Config.CanCreate(session.UserId, GroupMode.Public),
                 CanCreatePrivate = manager.Config.CanCreate(session.UserId, GroupMode.Private),
                 CanInviteGuests = manager.Config.CanInviteGuests(session.UserId), manager.Config.MaxViewers, manager.Config.MaxInviteUses,

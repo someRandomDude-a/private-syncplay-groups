@@ -1,0 +1,11 @@
+<Project>
+  <!-- Latest stable Jellyfin target. Update together after the weekly latest-release check flags a new release. -->
+  <PropertyGroup>
+    <JellyfinVersion>12.2.0</JellyfinVersion>
+    <JellyfinServerTag>12.2</JellyfinServerTag>
+    <JellyfinTargetAbi>$(JellyfinVersion).0</JellyfinTargetAbi>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="JellyfinTargetAbi" Value="$(JellyfinTargetAbi)" />
+  </ItemGroup>
+</Project>

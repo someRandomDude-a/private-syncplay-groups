@@ -2,9 +2,9 @@
 
 Native .NET 10 plugin with private SyncPlay groups, limited invite links, administrator-controlled guest viewing, and bundled Jellyfin Web controls.
 
-**Preview software.** Builds against Jellyfin 12.0's plugin ABI. Tested against a disposable Jellyfin **12.2 Docker server**, including real guest HLS generation/delivery, private API guards, guest API isolation, admission limits and permission revocation. The web launcher, private creation and invite-link creation have also been exercised in a browser. Complete the deployment checklist below for your own configuration before Internet exposure. Guest sharing is **off by default**.
+**Preview software.** Builds against Jellyfin **12.2.0**, target ABI **12.2.0.0**. Tested against a disposable Jellyfin **12.2 Docker server**, including catalog installation, native updates, guest HLS delivery, private API guards and permission revocation. Complete the deployment checklist before Internet exposure. Guest sharing is **off by default**.
 
-**Supported target: Jellyfin 12.x / .NET 10.** The latest official stable release checked on 2026-10-17 is **12.2**. CI discovers the latest stable **12.x** release from Jellyfin's official release API and tests both it and the minimum **12.0**, including installation and upgrade. Weekly checks catch new 12.x releases; they do not silently switch to 13.x. Other server majors are explicitly disabled by the plugin. A future release is not claimed tested until CI passes; hardware/proxy-specific checks still apply.
+**Latest stable Jellyfin only: currently 12.2 / .NET 10** (checked 2026-10-17). `Directory.Build.props` defines the SDK, manifest ABI, runtime target and Docker image. Older releases are not supported or tested. CI checks Jellyfin's official latest stable release before testing/releasing, and weekly thereafter. A newer release fails with instructions to update and validate the target; CI never silently falls back to an older server or advertises unverified compatibility. Hardware/proxy-specific checks still apply.
 
 ## Features
 
@@ -19,7 +19,7 @@ Native .NET 10 plugin with private SyncPlay groups, limited invite links, admini
 
 ## Install from Jellyfin's plugin catalog
 
-Once the first tagged release has been published, add this stable repository URL:
+Add this stable repository URL:
 
 ```text
 https://raw.githubusercontent.com/someRandomDude-a/private-syncplay-groups/catalog/manifest.json
@@ -27,12 +27,12 @@ https://raw.githubusercontent.com/someRandomDude-a/private-syncplay-groups/catal
 
 1. Sign in as an administrator. Open **Dashboard → Plugins → Repositories** (or **Manage Repositories**).
 2. Choose **+**, enter **Private SyncPlay** as the repository name and the complete URL above as its URL, enable it, then **Save**.
-3. Open/refresh the **Catalog**, select **Private SyncPlay** in **General**, choose the compatible Jellyfin 12 version, and **Install**.
+3. On the supported latest Jellyfin server (**12.2**), open/refresh the **Catalog**, select **Private SyncPlay** in **General**, choose its newest plugin version, and **Install**.
 4. **Restart Jellyfin**, then configure **Dashboard → Plugins → Private SyncPlay**.
 
-This follows Jellyfin's [third-party repository method](https://jellyfin.org/docs/general/server/plugins/#repositories): the repository URL serves a JSON array of plugin packages, not a GitHub page or a ZIP. Each version points to its immutable release ZIP and the MD5 checksum Jellyfin requires. The `catalog` branch preserves previous published versions, independently of GitHub's latest-release selection. GitHub/raw content and release assets must be publicly accessible to the server. **The URL returns 404 until the first release and catalog publication succeed; nothing has been published by this coding session.**
+This follows Jellyfin's [third-party repository method](https://jellyfin.org/docs/general/server/plugins/#repositories): the URL serves a JSON array of plugin packages, not a GitHub page or ZIP. Each version points to its immutable release ZIP and required MD5. The `catalog` branch preserves version history independently of GitHub's latest-release selection. GitHub/raw content and release assets must be accessible to the server. **The catalog is already live. Latest-only support begins with plugin 0.1.3; if that version is not listed yet, it has not been published. Building this checkout alone does not update the public catalog or installed servers.**
 
-Do not add the SDK ZIP, a GitHub `/blob/…` page, the source metadata file, or a local filesystem path as a repository. If no plugin appears, check that the URL returns JSON with a nonempty `versions` array, the repository is enabled, the server is Jellyfin 12, and its network can reach GitHub. Jellyfin logs manifest/download/checksum failures. This catalog is not compatible with Jellyfin 10.x.
+Do not add the SDK ZIP, a GitHub `/blob/…` page, source metadata, or a local filesystem path as a repository. If no plugin appears, check the JSON has a nonempty `versions` array, the repository is enabled, the server is the supported latest version, and its network can reach GitHub. Jellyfin logs manifest/download/checksum failures. Current releases are filtered out on older servers by the target ABI; copying DLLs manually does not bypass the runtime version check.
 
 For manual installation, download **`PrivateSyncPlay-X.Y.Z.zip`** from [GitHub Releases](https://github.com/someRandomDude-a/private-syncplay-groups/releases), extract it into a `PrivateSyncPlay` folder inside Jellyfin's plugins directory, and restart. Keep **both** `Jellyfin.Plugin.PrivateSyncPlay.dll` and `Jellyfin.Plugin.PrivateSyncPlay.Api.dll` together. The separate `PrivateSyncPlay.Api-1.0.0.zip` asset is a developer SDK, not a Jellyfin catalog plugin.
 
@@ -56,11 +56,19 @@ dotnet test tests/Jellyfin.Plugin.PrivateSyncPlay.Tests -c Release
 ./scripts/package.ps1
 ```
 
-Extract `artifacts/PrivateSyncPlay-0.1.0.zip` into a new `PrivateSyncPlay` subdirectory inside Jellyfin's plugins directory, keeping both packaged DLLs together, then restart Jellyfin. Do not install the separate developer SDK archive as a plugin or copy Jellyfin server assemblies into that directory. The package embeds its web scripts and hls.js, whose license is included.
+Extract `artifacts/PrivateSyncPlay-0.1.3.zip` into a new `PrivateSyncPlay` subdirectory inside Jellyfin's plugins directory, keeping both packaged DLLs together, then restart Jellyfin. Do not install the separate developer SDK archive as a plugin or copy Jellyfin server assemblies into that directory. The package embeds its web scripts and hls.js, whose license is included.
 
 Configure **Dashboard → Plugins → Private SyncPlay**. Use the **Watch parties** toolbar button in Jellyfin Web to create a party, select its mode and concurrent-viewer cap, join by code, and manage invitations. The usual SyncPlay controls continue to handle signed-in playback.
 
 Guest links must be created and opened over **HTTPS**. The web controls disable guest-link creation on an HTTP connection; account-only invitations remain available.
+
+### Guest player and account invitations
+
+The isolated guest player uses Jellyfin Web's player skin hooks (`videoOsdBottom`, `osdControls`, `volumeButtons`, `btnSubtitles`, `btnFullscreen`, and native icon buttons/sliders). Volume/mute, captions and fullscreen are local controls; leaving is the player header's back action. The position display is read-only: no pause, seek, skip, speed or queue buttons are exposed. Local keyboard/media-element changes are corrected to the party position, but—as with any delivered video—an external tool can record or pause already-delivered bytes without controlling the party.
+
+Embedded and adjacent local text subtitles are converted through Jellyfin's subtitle encoder to bounded, party/generation-scoped WebVTT. Guests can choose a text track locally or follow the party; movie timestamps are adjusted to the HLS seek offset. Selected ASS/SSA and bitmap subtitles follow the signed-in player's selection and are rendered into the **shared** video using Jellyfin's native filters, preserving styling/positioning where supported by its encoder. They require the owner's video-transcoding permission; guests cannot launch separate caption encoders or change the party's subtitle selection. Remote subtitle URLs are not fetched, and captions are reauthorized after conversion and on every delivery.
+
+**Join with Jellyfin account** uses `/PrivateSyncPlay/Account#<secret>` as a short handoff, not an unknown Jellyfin route hash. It stores the invitation only in server-scoped tab/session storage for up to 30 minutes, then opens the normal Jellyfin entry page without a secret in its URL. After login and websocket readiness it joins once through the authorized invite API. Jellyfin's ordinary `GroupJoined`/queue messages then open the group's current playback using its normal player behavior; an empty group's normal idle behavior is retained. The plugin does not reopen its management dialog or reload the socket after joining. A client connected to another server is never sent the invitation secret.
 
 `scripts/package.ps1` generates the installable `artifacts/manifest.json` using the exact ZIP's checksum and also packages the developer SDK. `scripts/plugin-metadata.json` is **build input only**, not a repository; there is deliberately no empty root manifest pretending to be installable. Use the published raw `catalog/manifest.json` URL above in Jellyfin.
 
@@ -68,11 +76,26 @@ The packaging contract is checked against Jellyfin 12.2's [installer](https://gi
 
 ### Publishing a release (maintainers)
 
-Commit the source changes, create a version tag such as `v0.1.0`, and push the tag. `.github/workflows/release.yml` verifies .NET/UI tests and installs the packaged ZIP through a real Jellyfin Docker server's repository API, then tests the plugin and a separate API consumer. It publishes the plugin ZIP, SDK ZIP and manifest to that GitHub release **before** updating `manifest.json` on the dedicated `catalog` branch. No GitHub Pages setup is needed. The workflow needs `contents: write` permission and permission to create/update that branch. Existing release assets and catalog versions are not overwritten. Alternatively, run the release workflow manually with an **existing** `vX.Y.Z` tag.
+Commit the source changes, create the next unused version tag (this checkout prepares `v0.1.3`), and push the tag. `.github/workflows/release.yml` verifies .NET/UI tests, installs the ZIP through a real Jellyfin server's repository API, and tests native updates, playback/security and a separate API consumer. It publishes the plugin ZIP, SDK ZIP and manifest to the GitHub release **before** updating `manifest.json` on the `catalog` branch. No GitHub Pages setup is needed. The workflow requires `contents: write` and permission to create/update `catalog`; existing release assets and versions are not overwritten. Alternatively, run it manually with an **existing** `vX.Y.Z` tag.
 
 The verification job builds the **tag's exact version**, tests that ZIP, and passes the verified files to the publication job. Publication merges historical catalog entries with `scripts/merge-catalog.ps1` **without rebuilding or changing the tested ZIP**. Numeric version ordering, unchanged historical checksums/URLs, duplicate rejection and increasing release versions are regression-tested. The SDK keeps its own API version, independently of plugin release versions.
 
 The workflow merges the previous published catalog; local packaging can do the same with `./scripts/package.ps1 -Version X.Y.Z -PreviousManifest path/to/previous-manifest.json`. Reusing a version already in that catalog is rejected. Local packaging alone never creates a GitHub release or updates the catalog branch. If release creation succeeds but catalog publication fails (for example, branch protection), fix the permission and publish the **existing release's manifest**, not a rebuilt ZIP, with `scripts/publish-catalog.ps1`; supply the current catalog commit as `-ParentCommit` when the branch exists. The old catalog remains usable until the new one is published.
+
+### Maintainer action checklist
+
+1. Run **Actions → Build and test (latest Jellyfin) → Run workflow** on the intended source. Windows unit/UI/package checks and Linux catalog-install/upgrade/security tests must pass. Preview artifacts are not published releases.
+2. Ensure the repository is public, Actions has `contents: write`, and branch rules permit the release workflow to create/update `catalog`. Ordinary builds and pull requests are read-only.
+3. Commit the intended source and push an unused, increasing plugin-version tag:
+   ```powershell
+   git tag v0.1.3
+   git push origin v0.1.3
+   ```
+   Alternatively run **Actions → Release plugin and publish Jellyfin catalog → Run workflow**, supplying an **existing** `vX.Y.Z` tag. Both paths check out `refs/tags/vX.Y.Z`. Do not create an empty GitHub release first.
+4. The action validates the latest server, builds/tests the tag-version ZIP, passes verified artifacts to publication, merges history **without rebuilding**, rechecks the latest server, creates the release/assets and only then publishes the raw catalog. Failed verification cannot publish; existing releases are not overwritten.
+5. After both jobs succeed, check the raw repository URL returns the released version, ABI, ZIP URL and checksum; install/restart on a disposable server and verify the running version before announcing the release.
+
+When a new stable Jellyfin appears, update `JellyfinVersion` and `JellyfinServerTag` in `Directory.Build.props`, review SDK/.NET changes, pass the latest-server checks and publish a new plugin version. Historical catalog entries remain immutable; they are version history, not ongoing older-server support.
 
 ### Native UI and skin compatibility
 
@@ -100,6 +123,8 @@ Native skin selectors are supported, but arbitrary CSS that hides controls or co
 | Maximum concurrent guest streams | 2 | Server-wide encoder/remux process limit (1–32); additional parties receive 503, not another encoder |
 
 Each user can inherit or restrict public/private creation, override the default creation mode, and inherit/allow/deny guest invitations. A per-user Allow cannot bypass a server master restriction. Hosts cannot edit these policies.
+
+The **User overrides** table supports name search, per-row editing, and checkbox selection (the header checkbox selects all currently visible users). Open **Bulk edit selected** and check only the fields you want to change; unchecked fields stay untouched. Selected users hidden by search are still included, with their count shown above the table. **Reset** on a row, **Reset selected to defaults**, and **Reset all user overrides** remove explicit overrides so users inherit the current server defaults; they do not reset server settings. Reset-all requires confirmation and also clears saved entries for users no longer listed. Permission actions support one-step undo, and **Discard unsaved changes** reloads the saved configuration. All changes and resets remain drafts until **Save**.
 
 Only the party owner can issue or revoke links. Revoking a link disconnects guests admitted by that link. Existing signed-in participants keep their normal membership. An admin can end a party through the API. Limits describe **sessions**, not verified unique humans; anonymous identity and physical viewers cannot be proven.
 
@@ -140,7 +165,7 @@ Ending a party or revoking access prevents further delivery and stops unused enc
 ### Initial limitations
 
 - Server-hosted Jellyfin Web only. Native clients remain subject to privacy/limits but do not gain private-code or guest controls.
-- Guest playback supports **local video files only**, using the first video/audio tracks. No guest subtitles, Live TV, remote/STRM sources or disc images in this preview.
+- Guest playback supports **local video files only**, using the first video/audio tracks. No Live TV, remote/STRM sources or disc images. Text subtitles use native WebVTT conversion; selected styled/bitmap subtitles require native burn-in and are party-wide rather than independently selected per guest.
 - Requires Jellyfin's FFmpeg build with the selected encoders, HLS and `readrate_initial_burst`. Remuxing has low overhead; required guest conversion is additional load, separate from signed-in transcoding.
 - Hardware encoder selection is covered by tests using Jellyfin's actual helpers and mocked hardware capabilities. Actual GPU execution and HDR tone mapping must still be verified on the administrator's hardware; Docker integration tests exercise real stream-copy and required software conversion on a CPU-only server.
 - Do not combine with plugins replacing `ISyncPlayManager`. Registration/startup checks disable this plugin rather than silently downgrade privacy or intentionally abort server startup.
@@ -169,7 +194,7 @@ Authenticated routes retain Jellyfin's SyncPlay authorization policies and resol
 | DELETE | `/PrivateSyncPlay/Invites/{id}` | Owner revocation |
 | DELETE | `/PrivateSyncPlay/Groups/{id}` | Admin-only party termination |
 
-Anonymous guest routes are deliberately separate: `POST Guest/Redeem`, `GET Guest/State`, `GET Guest/media/{generation}/{name}`, `POST Guest/Leave`, under `/PrivateSyncPlay/`. There is no guest playback-control endpoint. Reverse proxies must not cache these responses or log request bodies/cookies.
+Anonymous guest routes are deliberately separate: `POST Guest/Redeem`, `GET Guest/State`, `GET Guest/media/{generation}/{name}`, `GET Guest/media/{generation}/subtitles/{index}.vtt`, and `POST Guest/Leave`, under `/PrivateSyncPlay/`. Caption indices refer only to the authorized currently playing video, never an arbitrary library item or file. There is no guest playback-control endpoint. Reverse proxies must not cache these responses or log request bodies/cookies.
 
 ## Integration checklist before deployment
 
@@ -182,7 +207,7 @@ node scripts/integration.mjs
 
 To test the actual repository/ZIP installation path (also run in CI): build `examples/WatchPartyConsumer`, run `scripts/package.ps1`, then `node scripts/integration.mjs --with-consumer --install-from-catalog`. This starts a temporary nginx repository on a dedicated Docker network, installs through Jellyfin's `Repositories`/`Packages` APIs, verifies the DLLs and generated `meta.json` in its versioned plugin folder, restarts Jellyfin, and runs the playback/security tests. The test repository changes only the package's URL to its Docker-local fixture; its ZIP bytes and MD5 remain those of the generated release package. No public release is required for this local test.
 
-For the native update/version-history test, run `./scripts/test-upgrade.ps1 -Directory <new-temporary-directory> -Image jellyfin/jellyfin:12.2` after building the example consumer. It builds fixture versions 0.0.1/0.0.2 only in that temporary directory, installs the older version, publishes the newer fixture, runs Jellyfin's Update Plugins task and verifies restart activation, retained configuration, compatible version listing and invalid guest credentials. It then runs the full playback/security suite against the updated plugin. Use `node scripts/jellyfin-versions.mjs` to discover the current supported CI image matrix. Fixture builds change local `bin` output; rerun normal packaging afterward to restore the preview build.
+For native update/version-history testing, run `./scripts/test-upgrade.ps1 -Directory <new-temporary-directory>` after building the example consumer. Fixture versions 0.0.1/0.0.2 are built only there; the test installs the older plugin on the latest server, publishes the newer fixture, runs Jellyfin's Update Plugins task and verifies restart activation, retained settings, version listing and invalidated guest credentials, followed by full playback/security checks. `node scripts/jellyfin-versions.mjs` verifies the target is still the official latest stable server; there is no older-server matrix. Fixture builds change local `bin` output; rerun normal packaging afterward.
 
 It uses the official `jellyfin/jellyfin:12.2` image, creates only new test data under the temporary directory, exposes randomly assigned **loopback-only** ports, generates a synthetic video and short-lived self-signed certificate, and removes its own container afterward. It does not mount or modify existing server data. The self-signed certificate exception applies only to the script's test HTTP client. Test data/diagnostics remain in the printed temporary folder. CI runs both this test and the unit tests.
 

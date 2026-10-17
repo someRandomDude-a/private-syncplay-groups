@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { target } from './jellyfin-target.mjs';
 
 const folder=process.argv[2] || 'artifacts';
 const catalog=JSON.parse(await readFile(join(folder,'manifest.json'),'utf8'));
@@ -21,7 +22,7 @@ for(const version of catalog[0].versions) {
 }
 const release=catalog[0].versions[0];
 assert.match(release.version,/^\d+\.\d+\.\d+\.0$/);
-assert.equal(release.targetAbi,'12.0.0.0');
+assert.equal(release.targetAbi,target.abi);
 const url=new URL(release.sourceUrl); assert.equal(url.protocol,'https:');
 const filename=url.pathname.split('/').at(-1);
 assert.match(filename,/^PrivateSyncPlay-\d+\.\d+\.\d+\.zip$/);

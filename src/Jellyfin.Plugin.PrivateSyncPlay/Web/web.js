@@ -3,6 +3,22 @@
     if (window.privateSyncPlayLoaded) return;
     window.privateSyncPlayLoaded = true;
     const root = new URL('../', document.currentScript.src);
+    const inviteKey = 'PrivateSyncPlay.Invite:' + root.pathname;
+    // Capture before awaiting UI loading or login navigation. Never use an unknown route hash for new links.
+    let pending, inviteAttempts = 0, retryAt = 0;
+    try {
+        const legacy = new URLSearchParams(location.hash.slice(1)).get('privateSyncPlayInvite');
+        if (legacy && /^[a-f0-9]{64}$/i.test(legacy)) {
+            sessionStorage.setItem(inviteKey, JSON.stringify({ token: legacy, expires: Date.now() + 30 * 60000 }));
+            history.replaceState(null, '', location.pathname + location.search);
+            // Older bookmarked account links may already have been parsed as a missing app route.
+            location.replace(new URL('../web/index.html', root).href);
+            return;
+        }
+        const saved = JSON.parse(sessionStorage.getItem(inviteKey) || 'null');
+        if (saved?.expires > Date.now() && /^[a-f0-9]{64}$/i.test(saved.token)) pending = saved.token;
+        else sessionStorage.removeItem(inviteKey);
+    } catch { /* Storage failure must not break the normal Jellyfin web app. */ }
     const UI = await (window.privateSyncPlayUILoading ||= new Promise((resolve, reject) => {
         if (window.PrivateSyncPlayUI) { resolve(window.PrivateSyncPlayUI); return; }
         const script = document.createElement('script'); script.src = new URL('assets/ui.js', root).href;
@@ -100,8 +116,6 @@
         }
         dialog.showModal();
     }
-    let pending = new URLSearchParams(location.hash.slice(1)).get('privateSyncPlayInvite');
-    if (pending) history.replaceState(null, '', location.pathname + location.search);
     function refresh() {
         const signedIn = !!api()?.accessToken();
         if (!signedIn) { launcher?.remove(); launcher = null; current?.dialog.close(); return; }
@@ -127,10 +141,27 @@
             launcher.onclick = () => { void show().catch(e => error(e.message || 'Could not load watch parties.')); };
             native.after(launcher);
         }
-        if (pending) {
+        if (pending && native && Date.now() >= retryAt) {
+            // A web client can manage more than one server. Never send this secret to another server.
+            if (new URL(api().getUrl('PrivateSyncPlay/JoinInvite')).href !== new URL('JoinInvite', root).href) return;
             const token = pending; pending = null;
-            void request('PrivateSyncPlay/JoinInvite', 'POST', { Token: token }).then(show)
-                .catch(() => error('Invitation invalid, full, expired, or media access denied.'));
+            // Jellyfin 12's SDK socket is separate from the legacy ApiClient.isWebSocketOpen flag.
+            // Check the actual server-side session controller, not that stale client flag.
+            void request('PrivateSyncPlay/Me').then(me => {
+                if (!me.realtimeReady) { pending = token; retryAt = Date.now() + 1000; return false; }
+                inviteAttempts++;
+                return request('PrivateSyncPlay/JoinInvite', 'POST', { Token: token }).then(() => true);
+            }).then(joined => {
+                if (!joined) return;
+                try { sessionStorage.removeItem(inviteKey); } catch { }
+                // Core GroupJoined/PlayQueue messages drive Jellyfin's normal player/navigation.
+                // Do not replace that with a plugin dialog or a full-page redirect (which drops the socket).
+                current?.dialog.close();
+            }).catch(e => {
+                if ((!e?.status || e.status >= 500) && inviteAttempts < 3) { pending = token; retryAt = Date.now() + inviteAttempts * 5000; }
+                else { try { sessionStorage.removeItem(inviteKey); } catch { } }
+                error('Could not join this invitation. It may be expired, full, revoked, or your account may not have access to its media.');
+            });
         }
     }
     setInterval(refresh, 1000);

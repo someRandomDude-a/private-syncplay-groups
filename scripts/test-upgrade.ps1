@@ -1,6 +1,10 @@
-param([Parameter(Mandatory)][string]$Directory, [string]$Dotnet = 'dotnet', [string]$Image = 'jellyfin/jellyfin:12.2')
+param([Parameter(Mandatory)][string]$Directory, [string]$Dotnet = 'dotnet', [string]$Image = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+if (-not $Image) {
+    $target = [xml](Get-Content (Join-Path $root 'Directory.Build.props') -Raw)
+    $Image = 'jellyfin/jellyfin:' + $target.Project.PropertyGroup.JellyfinServerTag
+}
 $folder = [IO.Path]::GetFullPath($Directory)
 $packages = Join-Path $folder 'packages'
 # These versions exist only in disposable fixtures, never in the public catalog/artifacts directory.

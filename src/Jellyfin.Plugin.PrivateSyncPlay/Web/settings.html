@@ -11,12 +11,178 @@
     'use strict';
     var id = '09514a9e-f7a0-4c5a-91bc-3a46338298ca';
     var page = document.querySelector('#privateSyncPlaySettings'), form = page.querySelector('#pspForm');
-    var config, rows = [], feedback, UI, loading;
+    // Reveal filtered invalid rows before asking the browser to focus their validation message.
+    form.noValidate = true;
+    var config, rows = [], feedback, UI, loading, editor, saving = false, dirty = false;
+    var search, selectAll, selectionStatus, bulkToggle, bulkPanel, bulkApply, bulkReset, clearSelection, undoButton, resetAll, discardButton;
+    var bulkFields = [], undo, discardUnlisted = false;
+    var columns = [
+        { key:'DefaultMode', label:'Default mode', choices:['Inherit','Public','Private'] },
+        { key:'CreatePublic', label:'Create public groups', choices:['Inherit','Allow','Deny'] },
+        { key:'CreatePrivate', label:'Create private groups', choices:['Inherit','Allow','Deny'] },
+        { key:'GuestInvites', label:'Guest invitations', choices:['Inherit','Allow','Deny'] }
+    ];
     var bools = { EnablePrivateGroups:'Enable private groups', AllowPublicGroups:'Allow public groups',
         EnableGuestInvites:'Enable guest invitations (server-wide master switch)', DefaultGuestPermission:'Permit guest invitations by default for users' };
     var numbers = { MaxGuestStreams:['Maximum concurrent guest streams (server-wide)',1,32], MaxViewers:['Maximum simultaneous viewers',1,1000], MaxInviteUses:['Maximum uses per invitation',1,10000],
         GuestLeaseSeconds:['Guest reconnect grace (seconds)',10,120], GuestVideoBitrateKbps:['Guest video bitrate cap (kbps)',256,10000] };
     function enumValue(value, choices) { return typeof value === 'number' ? choices[value] : value; }
+    function userKey(value) { return String(value || '').replace(/-/g,'').toLowerCase(); }
+    function selected() { return rows.filter(function (row) { return row.selected.checked; }); }
+    function command(label, parent, run, kind) {
+        var button = UI.button(label, parent, null, kind);
+        button.onclick = async function () {
+            if (saving || loading) return;
+            button.disabled = true;
+            try { await run(); }
+            catch (error) { UI.message(feedback, error.message || 'Could not update user overrides.', true); }
+            finally { button.disabled = false; updateSelection(); }
+        };
+        return button;
+    }
+    function markDirty(manual) {
+        dirty = true; if (manual) undo = null;
+        updateSelection(); validateDefaults();
+        UI.message(feedback, 'Unsaved changes. Select Save to apply permissions to the server.');
+    }
+    function validateDefaults() {
+        var serverMode = page.querySelector('#DefaultMode');
+        if (!serverMode) return;
+        function enabled(mode) { return page.querySelector(mode === 'Public' ? '#AllowPublicGroups' : '#EnablePrivateGroups').checked; }
+        serverMode.setCustomValidity(enabled(serverMode.value) ? '' : 'The server default must be an enabled group mode.');
+        rows.forEach(function (row) {
+            var mode = row.fields.DefaultMode.value;
+            var allowed = mode === 'Inherit' || (enabled(mode) && row.fields[mode === 'Public' ? 'CreatePublic' : 'CreatePrivate'].value !== 'Deny');
+            row.fields.DefaultMode.setCustomValidity(allowed ? '' : row.name + ': choose Inherit or a creation mode this user is allowed to create.');
+        });
+    }
+    function updateSelection() {
+        if (!selectAll) return;
+        var visible = rows.filter(function (row) { return !row.tr.hidden; });
+        var picked = selected(), visiblePicked = visible.filter(function (row) { return row.selected.checked; }).length;
+        selectAll.checked = visible.length > 0 && visiblePicked === visible.length;
+        selectAll.indeterminate = visiblePicked > 0 && visiblePicked < visible.length;
+        selectAll.setAttribute('aria-checked', selectAll.indeterminate ? 'mixed' : String(selectAll.checked));
+        selectAll.disabled = visible.length === 0;
+        selectAll.parentElement.querySelector('.checkboxIcon-unchecked').classList.toggle('remove', selectAll.indeterminate);
+        var hiddenPicked = picked.length - visiblePicked;
+        selectionStatus.textContent = visible.length + ' of ' + rows.length + ' users shown · ' + picked.length + ' selected'
+            + (hiddenPicked ? ' (' + hiddenPicked + ' hidden by search). Bulk actions include hidden selections.' : '.');
+        bulkToggle.querySelector('span').textContent = 'Bulk edit selected (' + picked.length + ')';
+        bulkToggle.disabled = !picked.length;
+        bulkApply.disabled = !picked.length || !bulkFields.some(function (field) { return field.enabled.checked; });
+        bulkReset.disabled = !picked.length; clearSelection.disabled = !picked.length;
+        resetAll.disabled = !rows.length && !(config.Users || []).length;
+        undoButton.disabled = !undo; discardButton.disabled = !dirty;
+        if (!picked.length) { bulkPanel.hidden = true; bulkToggle.setAttribute('aria-expanded','false'); }
+    }
+    function filterUsers() {
+        var query = search.value.trim().toLocaleLowerCase();
+        rows.forEach(function (row) { row.tr.hidden = !row.name.toLocaleLowerCase().includes(query); });
+        updateSelection();
+    }
+    function remember(targets) {
+        undo = { discardUnlisted:discardUnlisted, rows:targets.map(function (row) {
+            return { row:row, values:Object.fromEntries(columns.map(function (column) { return [column.key,row.fields[column.key].value]; })) };
+        }) };
+    }
+    function resetRows(targets) {
+        remember(targets);
+        targets.forEach(function (row) { columns.forEach(function (column) { row.fields[column.key].value = 'Inherit'; }); });
+        markDirty(false);
+        UI.message(feedback, targets.length + ' users reset to inherited server defaults. Server settings are unchanged. Select Save to apply.');
+    }
+    function confirmAction(title, text, run) {
+        var popup = UI.dialog(title);
+        UI.element('p', text, popup.content, 'fieldDescription');
+        UI.button('Cancel', popup.content, function () { popup.dialog.close(); });
+        UI.button('Confirm', popup.content, async function () { if (saving || loading) return; popup.dialog.close(); await run(); }, 'primary');
+        popup.dialog.showModal();
+    }
+    function userTable(users, parent) {
+        UI.element('h3', 'User overrides', parent, 'sectionTitle');
+        UI.element('p', 'Inherit follows server settings. Allow never overrides a disabled server capability or grants Jellyfin library/SyncPlay permissions. Changes, including resets, take effect only after Save.', parent, 'fieldDescription');
+        var toolbar = UI.element('div', null, parent, 'privateSyncPlayUserToolbar');
+        search = UI.field('Search users', 'search', '', toolbar, 'pspUserSearch'); search.oninput = filterUsers;
+        search.onkeydown = function (event) { if (event.key === 'Enter') event.preventDefault(); };
+        bulkToggle = command('Bulk edit selected (0)', toolbar, function () {
+            bulkPanel.hidden = !bulkPanel.hidden;
+            bulkToggle.setAttribute('aria-expanded',String(!bulkPanel.hidden));
+        });
+        bulkToggle.id = 'pspBulkToggle'; bulkToggle.setAttribute('aria-controls','pspBulkPanel'); bulkToggle.setAttribute('aria-expanded','false');
+        clearSelection = command('Clear selection', toolbar, function () { rows.forEach(function (row) { row.selected.checked = false; }); updateSelection(); });
+        clearSelection.id = 'pspClearSelection';
+        undoButton = command('Undo last permission action', toolbar, function () {
+            var snapshot = undo; if (!snapshot) return;
+            snapshot.rows.forEach(function (entry) { columns.forEach(function (column) { entry.row.fields[column.key].value = entry.values[column.key]; }); });
+            discardUnlisted = snapshot.discardUnlisted; undo = null; markDirty(false);
+        }); undoButton.id = 'pspUndo';
+        selectionStatus = UI.status(parent, 'pspSelectionStatus');
+        bulkPanel = UI.element('section', null, parent, 'paperList verticalSection privateSyncPlayBulkPanel');
+        bulkPanel.id = 'pspBulkPanel'; bulkPanel.hidden = true; bulkPanel.setAttribute('aria-label','Bulk edit selected user overrides');
+        UI.element('p', 'Check the fields to change. Unchecked fields are left as they are. All selected users, including hidden search results, are affected.', bulkPanel, 'fieldDescription');
+        bulkFields = columns.map(function (column) {
+            var field = UI.element('div', null, bulkPanel, 'privateSyncPlayBulkField');
+            var enabled = UI.field('Change ' + column.label.toLocaleLowerCase(), 'checkbox', false, field, 'pspBulkChange' + column.key);
+            var value = UI.select('New ' + column.label.toLocaleLowerCase(), column.choices, 'Inherit', field, 'pspBulk' + column.key);
+            value.disabled = true;
+            enabled.onchange = function () { value.disabled = !enabled.checked; updateSelection(); };
+            return { key:column.key, enabled:enabled, value:value };
+        });
+        var bulkActions = UI.element('div', null, bulkPanel, 'privateSyncPlayUserToolbar');
+        bulkApply = command('Apply checked fields to selected users', bulkActions, function () {
+            var targets = selected(); if (!targets.length) return;
+            remember(targets);
+            targets.forEach(function (row) { bulkFields.forEach(function (field) { if (field.enabled.checked) row.fields[field.key].value = field.value.value; }); });
+            markDirty(false);
+        }, 'primary'); bulkApply.id = 'pspBulkApply';
+        bulkReset = command('Reset selected to defaults', bulkActions, function () { resetRows(selected()); }); bulkReset.id = 'pspBulkReset';
+        var scroll = UI.element('div', null, parent, 'privateSyncPlayTableScroll');
+        scroll.tabIndex = 0; scroll.setAttribute('role','region'); scroll.setAttribute('aria-label','User override table (scroll horizontally on small screens)');
+        var table = UI.element('table', null, scroll, 'detailTable privateSyncPlayUserTable');
+        UI.element('caption', 'Per-user watch party overrides', table, 'fieldDescription');
+        var head = UI.element('tr', null, UI.element('thead', null, table));
+        var pick = UI.element('th', null, head, 'detailTableHeaderCell privateSyncPlaySelectCell'); pick.scope = 'col';
+        selectAll = UI.field('Select all visible users', 'checkbox', false, pick, 'pspSelectAllUsers');
+        selectAll.onchange = function () { rows.filter(function (row) { return !row.tr.hidden; }).forEach(function (row) { row.selected.checked = selectAll.checked; }); updateSelection(); };
+        ['User'].concat(columns.map(function (column) { return column.label; }), ['Reset']).forEach(function (label) {
+            var th = UI.element('th', label, head, 'detailTableHeaderCell'); th.scope = 'col';
+        });
+        var body = UI.element('tbody', null, table);
+        var saved = new Map((config.Users || []).map(function (item) { return [userKey(item.UserId),item]; }));
+        users.slice().sort(function (a,b) { return a.Name.localeCompare(b.Name,undefined,{numeric:true,sensitivity:'base'}); }).forEach(function (user,index) {
+            var settings = saved.get(userKey(user.Id)) || {}, row = { id:user.Id, name:user.Name, original:settings, fields:{} };
+            row.tr = UI.element('tr', null, body, 'listItem-border'); row.tr.dataset.userId = user.Id;
+            row.selected = UI.field('Select ' + user.Name, 'checkbox', false, UI.element('td', null, row.tr, 'detailTableBodyCell privateSyncPlaySelectCell'), 'pspPickUser' + index);
+            row.selected.onchange = updateSelection;
+            var name = UI.element('th', user.Name, row.tr, 'detailTableBodyCell'); name.scope = 'row';
+            if (user.Policy?.IsDisabled) UI.element('div', 'Account disabled', name, 'fieldDescription');
+            columns.forEach(function (column) {
+                var value = column.key === 'DefaultMode' ? (settings.DefaultMode == null ? 'Inherit' : enumValue(settings.DefaultMode,['Public','Private']))
+                    : enumValue(settings[column.key],column.choices) || 'Inherit';
+                row.fields[column.key] = UI.select(column.label + ' — ' + user.Name, column.choices, value,
+                    UI.element('td', null, row.tr, 'detailTableBodyCell'), 'pspUser' + index + column.key);
+                row.fields[column.key].onchange = function () { markDirty(true); };
+            });
+            var reset = UI.button('Reset', UI.element('td', null, row.tr, 'detailTableBodyCell'), function () { resetRows([row]); });
+            reset.className = 'emby-button button-flat'; reset.setAttribute('aria-label','Reset overrides for ' + user.Name);
+            rows.push(row);
+        });
+        if (!rows.length) UI.element('p', 'No users are available.', parent, 'fieldDescription');
+        var listed = new Set(rows.map(function (row) { return userKey(row.id); }));
+        var unlisted = (config.Users || []).filter(function (entry) { return !listed.has(userKey(entry.UserId)); }).length;
+        if (unlisted) UI.element('p', unlisted + ' saved override entries are not in this user list and will be preserved. Reset all user overrides also clears those entries.', parent, 'fieldDescription');
+        var footer = UI.element('div', null, parent, 'privateSyncPlayUserToolbar');
+        resetAll = command('Reset all user overrides', footer, function () {
+            confirmAction('Reset all user overrides?', 'All users will inherit server defaults, including entries for users no longer listed. This may restore permissions currently denied by an override. Server settings will not change. Nothing is applied until Save.', function () {
+                resetRows(rows); discardUnlisted = true;
+            });
+        }, 'delete'); resetAll.id = 'pspResetAllUsers';
+        discardButton = command('Discard unsaved changes', footer, function () {
+            confirmAction('Discard unsaved changes?', 'Reload the saved server configuration and discard this page’s unsaved edits?', load);
+        }); discardButton.id = 'pspDiscardChanges';
+        updateSelection();
+    }
     function loadUI() {
         return window.privateSyncPlayUILoading ||= new Promise(function (resolve, reject) {
             if (window.PrivateSyncPlayUI) { resolve(window.PrivateSyncPlayUI); return; }
@@ -24,9 +190,10 @@
             script.onload = function () { resolve(window.PrivateSyncPlayUI); }; script.onerror = reject; document.head.appendChild(script);
         });
     }
-    async function load() {
+    async function readSettings() {
         UI = await loadUI();
-        config = await ApiClient.getPluginConfiguration(id);
+        var nextConfig = await ApiClient.getPluginConfiguration(id);
+        var users = await ApiClient.getUsers();
         try {
             var version = await ApiClient.ajax({ type:'GET', url:ApiClient.getUrl('PrivateSyncPlay/Version'), dataType:'json' });
             page.querySelector('#pspVersion').textContent = 'Private SyncPlay ' + (version.PluginVersion || version.pluginVersion)
@@ -35,45 +202,64 @@
         } catch {
             page.querySelector('#pspVersion').textContent = 'Version information unavailable. Check Dashboard → Plugins for installed versions and updates.';
         }
-        var users = await ApiClient.getUsers(); form.replaceChildren(); rows = [];
-        Object.keys(bools).forEach(function (key) { UI.field(bools[key], 'checkbox', config[key], form, key); });
-        UI.select('Default creation mode', ['Public','Private'], enumValue(config.DefaultMode,['Public','Private']), form, 'DefaultMode');
+        config = nextConfig; form.replaceChildren(); rows = []; dirty = false; undo = null; discardUnlisted = false;
+        editor = UI.element('fieldset', null, form, 'privateSyncPlaySettingsEditor');
+        UI.element('legend', 'Watch party settings', editor, 'privateSyncPlayVisuallyHidden');
+        Object.keys(bools).forEach(function (key) { UI.field(bools[key], 'checkbox', config[key], editor, key).onchange = function () { markDirty(false); }; });
+        UI.select('Default creation mode', ['Public','Private'], enumValue(config.DefaultMode,['Public','Private']), editor, 'DefaultMode').onchange = function () { markDirty(false); };
         Object.keys(numbers).forEach(function (key) {
-            var spec = numbers[key], input = UI.field(spec[0], 'number', config[key], form, key);
+            var spec = numbers[key], input = UI.field(spec[0], 'number', config[key], editor, key);
             input.min = spec[1]; input.max = spec[2]; input.required = true;
+            input.oninput = function () { markDirty(false); };
         });
-        UI.element('p', 'Compatible streams are copied. Required conversion follows Jellyfin’s Playback → Transcoding settings, including hardware acceleration.', form, 'fieldDescription');
-        UI.element('h3', 'Per-user permissions', form, 'sectionTitle');
-        UI.element('p', 'Inherit uses server settings. Allow never overrides a disabled server-wide capability.', form, 'fieldDescription');
-        users.forEach(function (user) {
-            var settings = (config.Users || []).find(function (u) { return u.UserId.replace(/-/g,'') === user.Id.replace(/-/g,''); }) || {};
-            var section = UI.element('section', null, form, 'verticalSection privateSyncPlayUser');
-            UI.element('h3', user.Name, section, 'sectionTitle');
-            function permission(key, label) { return UI.select(label, ['Inherit','Allow','Deny'], enumValue(settings[key], ['Inherit','Allow','Deny']) || 'Inherit', section); }
-            rows.push({ id:user.Id,
-                mode:UI.select('Default creation mode', ['Inherit','Public','Private'], settings.DefaultMode == null ? 'Inherit' : enumValue(settings.DefaultMode,['Public','Private']), section),
-                public:permission('CreatePublic','Create public groups'), private:permission('CreatePrivate','Create private groups'), guest:permission('GuestInvites','Create guest invitations') });
-        });
+        UI.element('p', 'Compatible streams are copied. Required conversion follows Jellyfin’s Playback → Transcoding settings, including hardware acceleration.', editor, 'fieldDescription');
+        userTable(users, editor);
         feedback = UI.status(form, 'pspResult');
-        var save = UI.button('Save', form, null, 'primary'); save.type = 'submit';
+        var save = UI.button('Save', editor, null, 'primary'); save.type = 'submit'; save.id = 'pspSave';
+        validateDefaults();
     }
-    function refresh() {
-        if (!loading) loading = load().catch(function () {
+    function load() {
+        if (loading || saving) return loading;
+        var previousEditor = editor;
+        if (previousEditor) previousEditor.disabled = true;
+        loading = readSettings().catch(function () {
             var target = feedback || form.querySelector('[role=status]');
             if (target) target.textContent = 'Could not load settings.';
-        }).finally(function () { loading = null; });
+        }).finally(function () {
+            if (previousEditor?.isConnected) previousEditor.disabled = false;
+            loading = null;
+        });
+        return loading;
     }
+    function refresh() { if (!dirty && !saving) void load(); }
     page.addEventListener('viewshow', refresh);
     form.addEventListener('submit', async function (event) {
-        event.preventDefault(); if (!config || !UI || !form.reportValidity()) return;
-        var save = form.querySelector('[type=submit]'); save.disabled = true;
-        Object.keys(bools).forEach(function (key) { config[key] = page.querySelector('#'+key).checked; });
-        Object.keys(numbers).forEach(function (key) { config[key] = Number(page.querySelector('#'+key).value); });
-        config.DefaultMode = page.querySelector('#DefaultMode').value;
-        config.Users = rows.map(function (r) { return { UserId:r.id, DefaultMode:r.mode.value === 'Inherit' ? null : r.mode.value, CreatePublic:r.public.value, CreatePrivate:r.private.value, GuestInvites:r.guest.value }; });
-        try { await ApiClient.updatePluginConfiguration(id, config); UI.message(feedback, 'Saved. Guest permission changes revoke affected sessions.'); }
+        event.preventDefault(); if (!config || !UI || saving || loading) return;
+        validateDefaults();
+        var invalid = rows.find(function (row) { return !row.fields.DefaultMode.validity.valid; });
+        if (invalid) {
+            search.value = ''; filterUsers(); invalid.fields.DefaultMode.focus();
+            UI.message(feedback, invalid.fields.DefaultMode.validationMessage, true);
+        }
+        if (!form.reportValidity()) return;
+        var next = JSON.parse(JSON.stringify(config));
+        Object.keys(bools).forEach(function (key) { next[key] = page.querySelector('#'+key).checked; });
+        Object.keys(numbers).forEach(function (key) { next[key] = Number(page.querySelector('#'+key).value); });
+        next.DefaultMode = page.querySelector('#DefaultMode').value;
+        var visibleIds = new Set(rows.map(function (row) { return userKey(row.id); }));
+        next.Users = discardUnlisted ? [] : (config.Users || []).filter(function (entry) { return !visibleIds.has(userKey(entry.UserId)); });
+        rows.forEach(function (row) {
+            var entry = { ...row.original, UserId:row.id };
+            columns.forEach(function (column) { var value = row.fields[column.key].value; entry[column.key] = column.key === 'DefaultMode' && value === 'Inherit' ? null : value; });
+            if (entry.DefaultMode != null || columns.slice(1).some(function (column) { return entry[column.key] !== 'Inherit'; })) next.Users.push(entry);
+        });
+        saving = true; editor.disabled = true;
+        try {
+            await ApiClient.updatePluginConfiguration(id, next); config = next; dirty = false; undo = null; discardUnlisted = false; updateSelection();
+            UI.message(feedback, 'Saved. Guest permission changes revoke affected sessions.');
+        }
         catch (error) { UI.message(feedback, 'Save failed. Check limits and whether default modes are allowed.', true); }
-        finally { save.disabled = false; }
+        finally { saving = false; editor.disabled = false; }
     });
     refresh();
 })();

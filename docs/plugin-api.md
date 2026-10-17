@@ -4,7 +4,7 @@ This is an **in-process .NET API**, not a loopback HTTP API. It follows Jellyfin
 
 ## Reference and register the client
 
-Requires Jellyfin 12 and .NET 10. Install Private SyncPlay normally on the server. Download `PrivateSyncPlay.Api-1.0.0.zip` from the same GitHub release, and add the DLL/XML to your development references:
+Requires the supported latest stable Jellyfin (currently 12.2) and .NET 10. Install Private SyncPlay normally on the server. Download `PrivateSyncPlay.Api-1.0.0.zip` from the same GitHub release, and add the DLL/XML to your development references:
 
 ```xml
 <Reference Include="Jellyfin.Plugin.PrivateSyncPlay.Api">

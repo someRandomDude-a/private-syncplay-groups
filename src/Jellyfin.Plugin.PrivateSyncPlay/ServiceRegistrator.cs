@@ -23,9 +23,9 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
             (sp, _) => (user, session, operation, json, token) => status.IsAvailable
                 ? sp.GetRequiredService<WatchPartyService>().InvokeAsync(user, session, operation, json, token)
                 : Task.FromResult("{\"statusCode\":503,\"error\":\"Private SyncPlay is unavailable.\"}"));
-        if (applicationHost.ApplicationVersion is not { Major: 12 })
+        if (!ServerCompatibility.Supports(applicationHost.ApplicationVersion))
         {
-            status.Disable("Private SyncPlay supports Jellyfin 12.x only. The existing server engine was not replaced.");
+            status.Disable($"Private SyncPlay targets Jellyfin {ServerCompatibility.TargetAbi} only. The existing server engine was not replaced.");
             services.AddHostedService<PartyMaintenance>();
             return;
         }
@@ -46,6 +46,7 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<ISyncPlayManager>(sp => sp.GetRequiredService<PrivateSyncPlayManager>());
         services.AddSingleton<GuestMedia>();
         services.AddSingleton<GuestEncoding>();
+        services.AddSingleton<GuestSubtitles>();
         services.AddSingleton<NativeWebStyles>();
         services.AddSingleton<WatchPartyService>();
         services.AddSingleton<IWatchPartyService>(sp => sp.GetRequiredService<WatchPartyService>());

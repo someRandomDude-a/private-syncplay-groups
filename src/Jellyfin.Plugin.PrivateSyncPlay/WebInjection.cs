@@ -27,7 +27,8 @@ public sealed class WebInjection(PluginStatus? status = null) : IStartupFilter
             var html = Encoding.UTF8.GetString(buffer.ToArray());
             // Relative to /web/; works with a configured Jellyfin base URL as well.
             var index = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
-            if (index >= 0) html = html.Insert(index, "<script defer src=\"../PrivateSyncPlay/assets/web.js?v=0.1.0\"></script>");
+            var version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown";
+            if (index >= 0) html = html.Insert(index, $"<script defer src=\"../PrivateSyncPlay/assets/web.js?v={Uri.EscapeDataString(version)}\"></script>");
             var bytes = Encoding.UTF8.GetBytes(html);
             context.Response.ContentLength = bytes.Length;
             context.Response.Headers.Remove("ETag");

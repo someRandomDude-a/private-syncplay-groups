@@ -22,20 +22,27 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
     public static string SettingsKey(EncodingOptions options)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(options))));
 
-    public GuestEncodingPlan Build(Video video, User owner, double offset, int bitrateKbps, EncodingOptions options)
+    public MediaBrowser.Model.Dto.MediaSourceInfo Source(Video video, User owner)
     {
-        var path = Path.GetFullPath(video.Path);
         var source = sources.GetStaticMediaSources(video, false, owner).FirstOrDefault(s =>
             s.Protocol == MediaProtocol.File && s.VideoType == VideoType.VideoFile && s.Path == video.Path
             && (string.IsNullOrEmpty(s.EncoderPath) || s.EncoderPath == s.Path)
             && (s.EncoderProtocol is null or MediaProtocol.File));
         if (source is null) throw new PartyException(415, "A local video media source is required.");
-        return Build(source, owner, offset, bitrateKbps, options, path);
+        return source;
+    }
+
+    public GuestEncodingPlan Build(Video video, User owner, double offset, int bitrateKbps, EncodingOptions options, int? subtitleIndex = null)
+    {
+        var source = Source(video, owner);
+        var subtitle = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.Index == subtitleIndex);
+        var burn = subtitle is not null && GuestSubtitlePolicy.Allowed(source, subtitle) && GuestSubtitlePolicy.NeedsBurnIn(subtitle) ? subtitle.Index : (int?)null;
+        return Build(source, owner, offset, bitrateKbps, options, Path.GetFullPath(video.Path), burn);
     }
 
     // The validated source overload also lets tests exercise Jellyfin's real encoding helpers.
     public GuestEncodingPlan Build(MediaBrowser.Model.Dto.MediaSourceInfo source, User owner, double offset,
-        int bitrateKbps, EncodingOptions options, string expectedPath)
+        int bitrateKbps, EncodingOptions options, string expectedPath, int? burnInSubtitleIndex = null)
     {
         if (source.Protocol != MediaProtocol.File || source.VideoType != VideoType.VideoFile
             || source.Path != expectedPath || (!string.IsNullOrEmpty(source.EncoderPath) && source.EncoderPath != source.Path)
@@ -45,7 +52,8 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
         {
             Container = "ts", VideoCodec = "h264", AudioCodec = "aac", VideoBitRate = bitrateKbps * 1000,
             AudioBitRate = 128000, MaxAudioChannels = 2, MaxVideoBitDepth = 8,
-            Profile = "high", VideoRangeType = "SDR", SubtitleStreamIndex = -1,
+            Profile = "high", VideoRangeType = "SDR", SubtitleStreamIndex = burnInSubtitleIndex ?? -1,
+            SubtitleMethod = SubtitleDeliveryMethod.Encode,
             StartTimeTicks = (long)(offset * TimeSpan.TicksPerSecond), EnableAudioVbrEncoding = true
         };
         var state = new EncodingJobInfo(TranscodingJobType.Hls)
@@ -55,6 +63,8 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
             SupportedVideoCodecs = ["h264"], SupportedAudioCodecs = ["aac"]
         };
         helper.AttachMediaSourceInfo(state, options, source, "index.ts");
+        if (burnInSubtitleIndex.HasValue && (state.SubtitleStream is null || !GuestSubtitlePolicy.Allowed(source, state.SubtitleStream)))
+            throw new PartyException(415, "The selected subtitle track is not available for guest playback.");
         if (state.VideoStream is null) throw new PartyException(415, "Video stream metadata is unavailable.");
         state.OutputVideoBitrate = helper.GetVideoBitrateParamValue(request, state.VideoStream, "h264");
         state.OutputAudioChannels = helper.GetNumAudioChannelsParam(state, state.AudioStream, "aac");
@@ -84,10 +94,8 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
 
         // All platform-specific encoder/decoder names and GPU/filter flags come from Jellyfin.
         var videoEncoder = helper.GetVideoEncoder(state, options);
-        var videoArgs = copyVideo ? helper.GetProgressiveVideoArguments(state, options, videoEncoder, EncoderPreset.veryfast)
-            : $"-codec:v:0 {videoEncoder} {helper.GetVideoProcessingFilterParam(state, options, videoEncoder)} "
-                + helper.GetVideoQualityParam(state, videoEncoder, options, EncoderPreset.veryfast)
-                + helper.GetHlsVideoKeyFrameArguments(state, videoEncoder, 2, false, null);
+        var videoArgs = helper.GetProgressiveVideoArguments(state, options, videoEncoder, EncoderPreset.veryfast)
+            + (copyVideo ? string.Empty : helper.GetHlsVideoKeyFrameArguments(state, videoEncoder, 2, false, null));
         var audioArgs = helper.GetProgressiveVideoAudioArguments(state, options);
         var args = $"-nostdin -hide_banner -loglevel error -protocol_whitelist file,pipe "
             + $"{helper.GetInputModifier(state, options, "ts")} -readrate 1 -readrate_initial_burst 12 "
@@ -97,7 +105,7 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
             + helper.GetAudioBitStreamArguments(state, "ts", source.Container)
             + " -f hls -hls_time 2 -hls_list_size 10 -hls_flags delete_segments+independent_segments+temp_file"
             + " -hls_segment_filename segment%09d.ts -y index.m3u8";
-        return new GuestEncodingPlan(args, videoEncoder, copyVideo, copyAudio, SettingsKey(options));
+        return new GuestEncodingPlan(args, videoEncoder, copyVideo, copyAudio, SettingsKey(options), burnInSubtitleIndex);
     }
 
     public static void EnsurePermissions(User owner, bool copyVideo, bool copyAudio)
@@ -110,7 +118,7 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
     }
 }
 
-public sealed record GuestEncodingPlan(string Arguments, string VideoEncoder, bool CopyVideo, bool CopyAudio, string SettingsKey)
+public sealed record GuestEncodingPlan(string Arguments, string VideoEncoder, bool CopyVideo, bool CopyAudio, string SettingsKey, int? BurnedSubtitleIndex = null)
 {
     public string PlaybackMethod => CopyVideo ? CopyAudio ? "Remux" : "DirectStream" : "Transcode";
 }

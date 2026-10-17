@@ -6,6 +6,16 @@ namespace Jellyfin.Plugin.PrivateSyncPlay;
 [ApiController, AllowAnonymous, Route("PrivateSyncPlay")]
 public sealed class AssetsController(NativeWebStyles styles) : ControllerBase
 {
+    [HttpGet("Account")]
+    public IActionResult Account()
+    {
+        Response.Headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
+        Response.Headers.CacheControl = "no-store";
+        using var input = typeof(Plugin).Assembly.GetManifestResourceStream("Jellyfin.Plugin.PrivateSyncPlay.Web.account.html")!;
+        using var reader = new StreamReader(input);
+        return Content(reader.ReadToEnd(), "text/html; charset=utf-8");
+    }
     [HttpGet("Watch")]
     public IActionResult Watch()
     {
@@ -21,7 +31,7 @@ public sealed class AssetsController(NativeWebStyles styles) : ControllerBase
     [HttpGet("assets/{name}")]
     public IActionResult Asset(string name) => name switch
     {
-        "web.js" or "guest.js" or "ui.js" => Resource(name, "text/javascript; charset=utf-8"),
+        "web.js" or "guest.js" or "ui.js" or "account.js" => Resource(name, "text/javascript; charset=utf-8"),
         "ui.css" => Resource(name, "text/css; charset=utf-8"),
         "native.css" => Content(styles.Css, "text/css; charset=utf-8"),
         "hls.js" => Resource("hls.js", "text/javascript; charset=utf-8", true),

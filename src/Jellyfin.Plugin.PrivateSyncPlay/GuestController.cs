@@ -81,4 +81,28 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
             Path = Request.PathBase + "/PrivateSyncPlay/Guest" });
         return NoContent();
     }
+    [HttpGet("media/{generation}/subtitles/{index:int}.vtt")]
+    public async Task<IActionResult> Subtitle(string generation, int index, [FromServices] GuestSubtitles subtitles)
+    {
+        Headers();
+        var credential = Credential;
+        GuestSubtitleRequest snapshot;
+        Guid partyId;
+        lock (store.Gate)
+        {
+            var party = store.GuestParty(credential, Config);
+            store.RateLimitGuest(credential, "subtitles", 30);
+            partyId = party.Id;
+            snapshot = media.Subtitle(party, generation, index);
+        }
+        var bytes = await subtitles.Read(partyId, generation, snapshot, HttpContext.RequestAborted);
+        lock (store.Gate)
+        {
+            var party = store.GuestParty(credential, Config);
+            var current = media.Subtitle(party, generation, index);
+            if (party.Id != partyId || current.Video.Id != snapshot.Video.Id || current.SourceId != snapshot.SourceId || current.Offset != snapshot.Offset)
+                throw new PartyException(410, "Stream ended.");
+        }
+        return File(bytes, "text/vtt; charset=utf-8");
+    }
 }

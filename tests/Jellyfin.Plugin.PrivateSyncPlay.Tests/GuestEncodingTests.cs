@@ -151,4 +151,18 @@ public sealed class GuestEncodingTests
         _source.Protocol = MediaProtocol.File; _source.EncoderPath = "https://evil.example/media";
         Assert.Throws<PartyException>(() => Build());
     }
+    [Theory]
+    [InlineData("ass")]
+    [InlineData("pgssub")]
+    public void PartySelectedStyledOrBitmapSubtitlesUseNativeBurnInAndRequireVideoConversion(string codec)
+    {
+        _source.MediaStreams = [.._source.MediaStreams, new MediaStream { Index = 2, Type = MediaStreamType.Subtitle, Codec = codec }];
+        _encoder.Setup(x => x.EscapeSubtitleFilterPath(It.IsAny<string>())).Returns("/test/subtitles.ass");
+        var plan = _encoding.Build(_source, _owner, 0, 2000, new EncodingOptions(), _source.Path, 2);
+        Assert.False(plan.CopyVideo);
+        Assert.Equal(2, plan.BurnedSubtitleIndex);
+        Assert.Contains(codec == "ass" ? "subtitles=" : "overlay", plan.Arguments);
+        Deny(PermissionKind.EnableVideoPlaybackTranscoding);
+        Assert.Equal(403, Assert.Throws<PartyException>(() => _encoding.Build(_source, _owner, 0, 2000, new EncodingOptions(), _source.Path, 2)).Status);
+    }
 }

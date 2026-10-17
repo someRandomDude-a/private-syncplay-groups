@@ -14,8 +14,8 @@ public sealed class VersionController(IServerApplicationHost host) : ControllerB
     {
         PluginVersion = typeof(Plugin).Assembly.GetName().Version?.ToString(),
         ServerVersion = host.ApplicationVersion.ToString(),
-        TargetAbi = "12.0.0.0",
-        SupportedServerMajor = 12,
+        TargetAbi = ServerCompatibility.TargetAbi,
+        SupportedServerVersion = ServerCompatibility.TargetAbi,
         ApiVersion = typeof(IWatchPartyService).Assembly.GetName().Version?.ToString()
     };
 }

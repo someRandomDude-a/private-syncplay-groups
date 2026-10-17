@@ -1,4 +1,4 @@
-name: Build and test
+name: Build and test (latest Jellyfin)
 on:
   push:
   pull_request:
@@ -37,25 +37,8 @@ jobs:
           path: |
             artifacts/*.zip
             artifacts/manifest.json
-  server-versions:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.releases.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - id: releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/jellyfin-versions.mjs
   integration:
-    needs: server-versions
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.server-versions.outputs.matrix) }}
-    name: Install and upgrade (${{ matrix.server }})
+    name: Latest Jellyfin install and upgrade
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,12 +49,17 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Require the current official latest stable release
+        id: server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/jellyfin-versions.mjs
       - run: npm ci --ignore-scripts
       - run: dotnet build src/Jellyfin.Plugin.PrivateSyncPlay -c Release
       - run: dotnet build examples/WatchPartyConsumer -c Release
       - shell: pwsh
         run: ./scripts/package.ps1
       - run: node scripts/validate-package.mjs
-      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-integration" --with-consumer --install-from-catalog --image=${{ matrix.image }}
+      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-integration" --with-consumer --install-from-catalog --image=${{ steps.server.outputs.image }}
       - shell: pwsh
-        run: ./scripts/test-upgrade.ps1 -Directory "${{ runner.temp }}/private-syncplay-upgrade" -Image '${{ matrix.image }}'
+        run: ./scripts/test-upgrade.ps1 -Directory "${{ runner.temp }}/private-syncplay-upgrade" -Image '${{ steps.server.outputs.image }}'

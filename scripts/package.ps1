@@ -1,10 +1,16 @@
-param([string]$Version = '0.1.0', [string]$Dotnet = 'dotnet',
+param([string]$Version = '', [string]$Dotnet = 'dotnet',
     [string]$Repository = 'someRandomDude-a/private-syncplay-groups', [string]$PreviousManifest = '',
     [string]$Changelog = 'Preview release. See GitHub release notes for changes.', [string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+if (-not $Version) {
+    $project = [xml](Get-Content (Join-Path $root 'src/Jellyfin.Plugin.PrivateSyncPlay/Jellyfin.Plugin.PrivateSyncPlay.csproj') -Raw)
+    $Version = ([string]$project.Project.PropertyGroup.Version) -replace '\.0$', ''
+}
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must have the form X.Y.Z' }
 if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Repository must have the form owner/name' }
-$root = Split-Path $PSScriptRoot -Parent
+$target = [xml](Get-Content (Join-Path $root 'Directory.Build.props') -Raw)
+$targetAbi = [string]$target.Project.PropertyGroup.JellyfinVersion + '.0'
 $manifest = @(Get-Content (Join-Path $PSScriptRoot 'plugin-metadata.json') -Raw | ConvertFrom-Json | ForEach-Object { $_ })
 if ($manifest.Count -ne 1 -or $manifest[0].guid -ne '09514a9e-f7a0-4c5a-91bc-3a46338298ca') { throw 'Invalid repository metadata' }
 $history = @()
@@ -43,7 +49,7 @@ try {
 } finally { $archive.Dispose() }
 if ([Reflection.AssemblyName]::GetAssemblyName((Join-Path $stage 'Jellyfin.Plugin.PrivateSyncPlay.dll')).Version.ToString() -ne "$Version.0") { throw 'Assembly version does not match catalog version' }
 $current = @{
-    version = $Version + '.0'; targetAbi = '12.0.0.0'; changelog = $Changelog
+    version = $Version + '.0'; targetAbi = $targetAbi; changelog = $Changelog
     sourceUrl = 'https://github.com/' + $Repository + '/releases/download/v' + $Version + '/' + $file
     checksum = (Get-FileHash $zip -Algorithm MD5).Hash.ToLowerInvariant()
     timestamp = [DateTime]::UtcNow.ToString('o')

@@ -1,12 +1,12 @@
 {
   "name": "jellyfin-private-syncplay",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.3",
   "dependencies": {
     "hls.js": "1.6.13"
   },
   "scripts": {
-    "check": "node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/web.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/ui.js",
+    "check": "node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/web.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/ui.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/account.js",
     "test:ui": "node --test tests/ui/*.test.mjs"
   },
   "devDependencies": {
