@@ -8,6 +8,14 @@
     "overview": "Native watch parties with administrator-controlled guest sharing and a versioned in-process API for other plugins.",
     "versions": [
       {
+        "version": "0.1.5.0",
+        "checksum": "99ba6925a60c935fa9999d1a3421ef14",
+        "targetAbi": "12.2.0.0",
+        "changelog": "Private SyncPlay v0.1.5 for Jellyfin 12.2. Release notes: https://github.com/someRandomDude-a/private-syncplay-groups/releases/tag/v0.1.5",
+        "timestamp": "2026-10-17T16:09:50.3836316Z",
+        "sourceUrl": "https://github.com/someRandomDude-a/private-syncplay-groups/releases/download/v0.1.5/PrivateSyncPlay-0.1.5.zip"
+      },
+      {
         "targetAbi": "12.2.0.0",
         "version": "0.1.4.0",
         "checksum": "c2e4fc84c761e496c3ebe942a58d481b",
