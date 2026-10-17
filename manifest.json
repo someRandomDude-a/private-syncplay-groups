@@ -1,0 +1,28 @@
+[
+  {
+    "guid": "09514a9e-f7a0-4c5a-91bc-3a46338298ca",
+    "name": "Private SyncPlay",
+    "category": "General",
+    "owner": "someRandomDude-a",
+    "description": "Private SyncPlay groups, limited invites and isolated temporary guest viewing for Jellyfin 12.",
+    "overview": "Native watch parties with administrator-controlled guest sharing and a versioned in-process API for other plugins.",
+    "versions": [
+      {
+        "sourceUrl": "https://github.com/someRandomDude-a/private-syncplay-groups/releases/download/v0.1.1/PrivateSyncPlay-0.1.1.zip",
+        "version": "0.1.1.0",
+        "targetAbi": "12.0.0.0",
+        "checksum": "af6f77aaa164eb3c926f05f9dd0b14ab",
+        "timestamp": "2026-10-17T04:28:08.5424787Z",
+        "changelog": "Preview release. See GitHub release notes for changes."
+      },
+      {
+        "timestamp": "2026-10-17T03:41:16.7155285Z",
+        "version": "0.1.0.0",
+        "targetAbi": "12.0.0.0",
+        "changelog": "Preview release. See GitHub release notes for changes.",
+        "checksum": "bc8f0482f4ce8738a7a9ccb098fcc96b",
+        "sourceUrl": "https://github.com/someRandomDude-a/private-syncplay-groups/releases/download/v0.1.0/PrivateSyncPlay-0.1.0.zip"
+      }
+    ]
+  }
+]
