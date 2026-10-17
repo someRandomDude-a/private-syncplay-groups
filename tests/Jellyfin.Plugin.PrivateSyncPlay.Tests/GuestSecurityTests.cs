@@ -73,7 +73,8 @@ public sealed class GuestSecurityTests
         Assert.Equal(Policies.SyncPlayHasAccess, typeof(PartyController).GetCustomAttribute<AuthorizeAttribute>()!.Policy);
         Assert.Equal(Policies.SyncPlayCreateGroup, typeof(PartyController).GetMethod("Create")!.GetCustomAttribute<AuthorizeAttribute>()!.Policy);
         Assert.Equal(Policies.SyncPlayJoinGroup, typeof(PartyController).GetMethod("JoinCode")!.GetCustomAttribute<AuthorizeAttribute>()!.Policy);
-        Assert.Equal(Policies.RequiresElevation, typeof(PartyController).GetMethod("EndParty")!.GetCustomAttribute<AuthorizeAttribute>()!.Policy);
+        // Ending is now available to the owner as well as admins; the action checks those actors explicitly.
+        Assert.Null(typeof(PartyController).GetMethod("EndParty")!.GetCustomAttribute<AllowAnonymousAttribute>());
     }
     [Fact] public void AssetsUseAnExplicitAllowlist()
     {

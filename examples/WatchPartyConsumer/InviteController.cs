@@ -49,6 +49,43 @@ public sealed class InviteController(IWatchPartyService parties, ISessionManager
         }
         catch (WatchPartyException ex) { return StatusCode(ex.StatusCode, new { Error = ex.Message }); }
     }
+    // Convenience wrapper for this example's current-party routes. Identity never comes from a body or route.
+    private async Task<IActionResult> Manage(Func<Guid, string, Guid, CancellationToken, Task<IActionResult>> operation)
+    {
+        try
+        {
+            var actor = Actor(); var token = HttpContext.RequestAborted;
+            var party = await parties.GetCurrentPartyAsync(actor.User, actor.Session, token)
+                ?? throw new WatchPartyException(404, "Join a party first.");
+            return await operation(actor.User, actor.Session, party.PartyId, token);
+        }
+        catch (WatchPartyException ex) { return StatusCode(ex.StatusCode, new { Error = ex.Message }); }
+    }
+    [HttpGet("Management")]
+    public Task<IActionResult> Management() => Manage(async (user, session, party, token) => Ok(new
+    {
+        ProviderAvailable = parties.IsAvailable, ClientType = parties.GetType().Name,
+        Management = await parties.GetManagementAsync(user, session, party, token)
+    }));
+    [HttpPost("Policy")]
+    public Task<IActionResult> Policy(WatchPartyPolicy policy) => Manage(async (user, session, party, token) =>
+    { await parties.UpdatePolicyAsync(user, session, party, policy, token); return NoContent(); });
+    [HttpPost("Accounts/{participant:guid}/Permissions")]
+    public Task<IActionResult> AccountPermissions(Guid participant, WatchPartyAccountPermissions permissions) => Manage(async (user, session, party, token) =>
+    { await parties.SetAccountPermissionsAsync(user, session, party, participant, permissions, token); return NoContent(); });
+    [HttpPost("Guests/{participant:guid}/Permissions")]
+    public Task<IActionResult> GuestPermissions(Guid participant, WatchPartyGuestPermissions options) => Manage(async (user, session, party, token) =>
+    { await parties.SetGuestPermissionsAsync(user, session, party, participant, options, token); return NoContent(); });
+    [HttpDelete("Accounts/{participant:guid}")]
+    public Task<IActionResult> KickAccount(Guid participant) => Manage(async (user, session, party, token) =>
+    { await parties.KickAccountAsync(user, session, party, participant, token); return NoContent(); });
+    // The calling UI must confirm that ALL guest leases sharing this invitation will be disconnected.
+    [HttpDelete("Guests/{participant:guid}/Admission")]
+    public Task<IActionResult> RevokeGuestAdmission(Guid participant) => Manage(async (user, session, party, token) =>
+    { await parties.KickGuestAndRevokeInviteAsync(user, session, party, participant, token); return NoContent(); });
+    [HttpPost("Blocked/{participant:guid}/Unblock")]
+    public Task<IActionResult> Unblock(Guid participant) => Manage(async (user, session, party, token) =>
+    { await parties.UnblockAccountAsync(user, session, party, participant, token); return NoContent(); });
 }
 
 // In a real integration ServerBaseUrl should come from trusted administrator configuration.

@@ -57,12 +57,26 @@ $current = @{
 $manifest[0].versions = @(@($current) + $history | Sort-Object { [Version]$_.version } -Descending)
 $json = ConvertTo-Json -InputObject $manifest -Depth 8
 [System.IO.File]::WriteAllText((Join-Path $output 'manifest.json'), $json, [System.Text.UTF8Encoding]::new($false))
-$sdk = Join-Path $output 'PrivateSyncPlay.Api-1.0.0'
+$sdkProject = [xml](Get-Content (Join-Path $root 'src/Jellyfin.Plugin.PrivateSyncPlay.Api/Jellyfin.Plugin.PrivateSyncPlay.Api.csproj') -Raw)
+$sdkVersion = [string]$sdkProject.Project.PropertyGroup.Version
+$sdkName = "PrivateSyncPlay.Api-$sdkVersion"
+$sdk = Join-Path $output $sdkName
 New-Item -ItemType Directory -Force $sdk | Out-Null
 Copy-Item (Join-Path $root 'src/Jellyfin.Plugin.PrivateSyncPlay.Api/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll') $sdk
 Copy-Item (Join-Path $root 'src/Jellyfin.Plugin.PrivateSyncPlay.Api/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.xml') $sdk
 Copy-Item (Join-Path $root 'docs/plugin-api.md') $sdk
 Copy-Item (Join-Path $root 'LICENSE') $sdk
-$sdkFiles = @('Jellyfin.Plugin.PrivateSyncPlay.Api.dll', 'Jellyfin.Plugin.PrivateSyncPlay.Api.xml', 'plugin-api.md', 'LICENSE')
-Compress-Archive -Path @($sdkFiles | ForEach-Object { Join-Path $sdk $_ }) -DestinationPath (Join-Path $output 'PrivateSyncPlay.Api-1.0.0.zip') -Force
+Copy-Item (Join-Path $root 'Directory.Build.props') $sdk
+$exampleFiles = @('WatchPartyConsumer.csproj', 'ConsumerPlugin.cs', 'InviteController.cs', 'PartyAutomation.cs', 'README.md')
+$examplePath = 'examples/WatchPartyConsumer'
+New-Item -ItemType Directory -Force (Join-Path $sdk $examplePath) | Out-Null
+foreach ($example in $exampleFiles) { Copy-Item (Join-Path $root "$examplePath/$example") (Join-Path $sdk "$examplePath/$example") }
+$sdkFiles = @('Jellyfin.Plugin.PrivateSyncPlay.Api.dll', 'Jellyfin.Plugin.PrivateSyncPlay.Api.xml', 'plugin-api.md', 'LICENSE', 'Directory.Build.props') + @($exampleFiles | ForEach-Object { "$examplePath/$_" })
+$sdkZip = Join-Path $output "$sdkName.zip"
+if (Test-Path -LiteralPath $sdkZip) { Remove-Item -LiteralPath $sdkZip }
+$sdkArchive = [IO.Compression.ZipFile]::Open($sdkZip, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    # Explicit files only: never pick up a previous example build's bin/obj or other staging files.
+    foreach ($entry in $sdkFiles) { [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($sdkArchive, (Join-Path $sdk $entry), $entry) | Out-Null }
+} finally { $sdkArchive.Dispose() }
 Write-Output "Package: $zip"

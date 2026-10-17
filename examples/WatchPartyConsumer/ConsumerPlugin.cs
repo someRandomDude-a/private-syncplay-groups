@@ -18,5 +18,6 @@ public sealed class ConsumerPlugin(IApplicationPaths paths, IXmlSerializer seria
 public sealed class Registrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection services, IServerApplicationHost applicationHost)
-        => services.AddPrivateSyncPlayClient();
+        => services.AddPrivateSyncPlayClient().AddPrivateSyncPlayGuestControl(
+            new("example.captions", "subtitles", "Example plugin captions", "closed_caption")).AddSingleton<PartyAutomation>();
 }

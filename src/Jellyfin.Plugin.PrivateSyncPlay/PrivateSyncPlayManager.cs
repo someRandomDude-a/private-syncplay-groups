@@ -1,6 +1,7 @@
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Controller.SyncPlay;
 using MediaBrowser.Controller.SyncPlay.Requests;
+using MediaBrowser.Controller.SyncPlay.PlaybackRequests;
 using MediaBrowser.Model.SyncPlay;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -89,6 +90,9 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
 
     private void JoinAuthorized(SessionInfo session, Party party, CancellationToken token)
     {
+        if (party.BlockedUsers.Contains(session.UserId)) throw new PartyException(403, "You have been removed from this party.");
+        if (!party.Policy.AllowJoins && !party.Members.Contains(session.Id) && session.UserId != party.Owner)
+            throw new PartyException(403, "This party is not accepting new viewers.");
         _store.CheckSeat(party, session.Id, Config);
         if (_inner.GetGroup(session, party.Id) is null) throw new PartyException(403, "You cannot access this party's media.");
         _inner.JoinGroup(session, new JoinGroupRequest(party.Id), token);
@@ -97,6 +101,8 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
             _store.RemoveSession(session.Id);
             party.Members.Add(session.Id);
         }
+        party.Account(session.UserId);
+        ApplyWaitPermissions(party);
     }
 
     public void LeaveGroup(SessionInfo session, LeaveGroupRequest request, CancellationToken cancellationToken)
@@ -110,7 +116,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
     public List<GroupInfoDto> ListGroups(SessionInfo session, ListGroupsRequest request)
     {
         lock (_store.Gate) { Status.EnsureAvailable(); return _inner.ListGroups(session, request)
-             .Where(g => _store.Parties.TryGetValue(g.GroupId, out var p) && p.Mode == GroupMode.Public).ToList();
+              .Where(g => _store.Parties.TryGetValue(g.GroupId, out var p) && p.Mode == GroupMode.Public && !p.BlockedUsers.Contains(session.UserId)).ToList();
         }
     }
     public GroupInfoDto? GetGroup(SessionInfo session, Guid groupId)
@@ -118,7 +124,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         lock (_store.Gate)
         {
             Status.EnsureAvailable();
-            if (!_store.Parties.TryGetValue(groupId, out var p) || (p.Mode == GroupMode.Private && !p.Members.Contains(session.Id))) return null;
+            if (!_store.Parties.TryGetValue(groupId, out var p) || p.BlockedUsers.Contains(session.UserId) || (p.Mode == GroupMode.Private && !p.Members.Contains(session.Id))) return null;
             return _inner.GetGroup(session, groupId);
         }
     }
@@ -127,11 +133,122 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         lock (_store.Gate)
         {
             Status.EnsureAvailable();
-            if (_store.ForSession(session.Id) is null) throw new PartyException(404, "Party not found.");
+            var party = _store.ForSession(session.Id) ?? throw new PartyException(404, "Party not found.");
+            if (party.BlockedUsers.Contains(session.UserId)) throw new PartyException(403, "You have been removed from this party.");
+            if (request is null) throw new PartyException(400, "A playback request is required.");
+            var control = party.CanControl(session.UserId);
+            var permitted = request.Action switch
+            {
+                PlaybackRequestType.Ping or PlaybackRequestType.Buffer or PlaybackRequestType.Ready or PlaybackRequestType.IgnoreWait => true,
+                PlaybackRequestType.Pause or PlaybackRequestType.Unpause or PlaybackRequestType.Stop or PlaybackRequestType.Seek
+                    or PlaybackRequestType.NextItem or PlaybackRequestType.PreviousItem or PlaybackRequestType.SetPlaylistItem => control,
+                PlaybackRequestType.Play or PlaybackRequestType.Queue or PlaybackRequestType.RemoveFromPlaylist or PlaybackRequestType.MovePlaylistItem
+                    or PlaybackRequestType.SetRepeatMode or PlaybackRequestType.SetShuffleMode => party.CanEditQueue(session.UserId),
+                _ => false
+            };
+            if (!permitted) throw new PartyException(403, "The owner has not allowed this party action.");
+            ApplyWaitPermissions(party);
+            // A read-only viewer must not pause/seek the group indirectly through buffering/readiness reports.
+            if (!control && request.Action is PlaybackRequestType.Buffer or PlaybackRequestType.Ready or PlaybackRequestType.IgnoreWait) return;
             _inner.HandleRequest(session, request, cancellationToken);
         }
     }
     public bool IsUserActive(Guid userId) => _inner.IsUserActive(userId);
+    public Party OwnedParty(SessionInfo actor, Guid id)
+    {
+        Status.EnsureAvailable();
+        _store.Sweep(Config);
+        var party = _store.ForSession(actor.Id);
+        if (party?.Id != id) throw new PartyException(404, "Party not found for this session.");
+        if (party.Owner != actor.UserId) throw new PartyException(403, "Only the party owner may manage participants.");
+        return party;
+    }
+    public void UpdatePolicy(SessionInfo actor, Guid id, PartyPolicy policy, int capacity)
+    {
+        lock (_store.Gate)
+        {
+            var party = OwnedParty(actor, id);
+            ValidateFeatures(policy.GuestFeatures);
+            if (capacity < party.Members.Count + (policy.AllowGuests ? _store.GuestCount(id) : 0) || capacity < 1 || capacity > Config.MaxViewers)
+                throw new PartyException(400, "The viewer limit must cover current viewers and stay within the server limit.");
+            party.Policy = policy with { GuestFeatures = policy.GuestFeatures?.ToArray() }; party.Capacity = capacity;
+            if (!policy.AllowGuests) _store.RevokeGuestInvitations(party);
+            ApplyWaitPermissions(party);
+        }
+    }
+    public void SetAccountPermissions(SessionInfo actor, Guid partyId, Guid participant, bool control, bool queue)
+    {
+        lock (_store.Gate)
+        {
+            var party = OwnedParty(actor, partyId);
+            var account = party.Accounts.Values.FirstOrDefault(a => a.Id == participant) ?? throw new PartyException(404, "Participant not found.");
+            if (account.UserId == party.Owner) throw new PartyException(400, "The owner retains management and playback control.");
+            account.ControlPlayback = control; account.EditQueue = queue; ApplyWaitPermissions(party);
+        }
+    }
+    public void SetGuestPermissions(SessionInfo actor, Guid partyId, Guid participant, string[]? features)
+    {
+        lock (_store.Gate)
+        {
+            var party = OwnedParty(actor, partyId); ValidateFeatures(features);
+            var guest = _store.Guests(party.Id).FirstOrDefault(g => g.Id == participant) ?? throw new PartyException(404, "Guest not found.");
+            if (features?.Any(f => party.Policy.GuestFeatures is not null && !party.Policy.GuestFeatures.Contains(f, StringComparer.Ordinal)) == true)
+                throw new PartyException(403, "Guest features cannot exceed the party's allowed features.");
+            guest.Features = features?.ToArray();
+        }
+    }
+    private void ValidateFeatures(string[]? features)
+    {
+        if (features is not null && (features.Length > GuestPlayerPolicy.Features.Length || features.Distinct(StringComparer.Ordinal).Count() != features.Length
+            || features.Any(f => !Config.GuestPlayer.Allows(f)))) throw new PartyException(403, "Guest features cannot exceed the administrator's allowlist.");
+    }
+    public void Kick(SessionInfo actor, Guid partyId, Guid participant)
+    {
+        lock (_store.Gate)
+        {
+            var party = OwnedParty(actor, partyId);
+            var guest = _store.Guests(partyId).FirstOrDefault(g => g.Id == participant);
+            if (guest is not null) { _store.Revoke(party, guest.InviteId); return; }
+            var account = party.Accounts.Values.FirstOrDefault(a => a.Id == participant) ?? throw new PartyException(404, "Participant not found.");
+            if (account.UserId == party.Owner) throw new PartyException(400, "The owner cannot be kicked. Leave or end the party instead.");
+            var targets = _sessions.Sessions.Where(s => s.UserId == account.UserId && party.Members.Contains(s.Id)).ToArray();
+            party.BlockedUsers.Add(account.UserId);
+            foreach (var session in targets) _store.RemoveSession(session.Id); // Revoke plugin access before native cleanup.
+            try { foreach (var session in targets) _inner.LeaveGroup(session, new LeaveGroupRequest(), CancellationToken.None); }
+            catch (Exception error)
+            {
+                _logger.LogWarning("Native participant removal failed ({ErrorType}); ending the party.", error.GetType().Name);
+                EndParty(partyId); throw new PartyException(503, "Removal could not be confirmed; the party was ended for safety.");
+            }
+        }
+    }
+    public void Unblock(SessionInfo actor, Guid partyId, Guid participant)
+    {
+        lock (_store.Gate)
+        {
+            var party = OwnedParty(actor, partyId);
+            var account = party.Accounts.Values.FirstOrDefault(a => a.Id == participant) ?? throw new PartyException(404, "Participant not found.");
+            party.BlockedUsers.Remove(account.UserId); // Does not rejoin, restore permissions, or redeem an invitation.
+        }
+    }
+    private void ApplyWaitPermissions(Party party)
+    {
+        try
+        {
+            foreach (var session in _sessions.Sessions.Where(s => party.Members.Contains(s.Id)))
+            {
+                var readOnly = !party.CanControl(session.UserId);
+                if (readOnly == party.ReadOnlySessions.Contains(session.Id)) continue;
+                _inner.HandleRequest(session, new IgnoreWaitGroupRequest(readOnly), CancellationToken.None);
+                if (readOnly) party.ReadOnlySessions.Add(session.Id); else party.ReadOnlySessions.Remove(session.Id);
+            }
+        }
+        catch (Exception error)
+        {
+            _logger.LogWarning("Native wait policy update failed ({ErrorType}); ending the party.", error.GetType().Name);
+            EndParty(party.Id); throw new PartyException(503, "Permissions could not be applied safely; the party was ended.");
+        }
+    }
     public void EndParty(Guid id)
     {
         lock (_store.Gate)

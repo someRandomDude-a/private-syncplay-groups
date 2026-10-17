@@ -27,7 +27,7 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
     private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts", ".m2ts", ".mpg", ".mpeg" };
 
-    public object State(Party party)
+    public GuestPlaybackState State(Party party)
     {
         EnsureAvailable(party);
         var owner = CheckOwner(party);
@@ -36,7 +36,7 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
         if (member?.NowPlayingItem is null)
         {
             Stop(party.Id);
-            return new { Playing = false, Paused = true };
+            return new() { Playing = false, Paused = true };
         }
         var video = library.GetItemById<Video>(member.NowPlayingItem.Id, owner);
         if (video is null || !VideoExtensions.Contains(Path.GetExtension(video.Path)) || !File.Exists(video.Path))
@@ -50,7 +50,7 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
         var selectedIndex = member.PlayState.SubtitleStreamIndex ?? source.DefaultSubtitleStreamIndex ?? -1;
         var selected = available.FirstOrDefault(s => s.Index == selectedIndex);
         var burnIndex = selected is not null && GuestSubtitlePolicy.NeedsBurnIn(selected) ? selected.Index : (int?)null;
-        var tracks = available.Where(s => !GuestSubtitlePolicy.NeedsBurnIn(s))
+        var tracks = available.Where(s => Config.GuestPlayer.Allows("subtitles") && !GuestSubtitlePolicy.NeedsBurnIn(s))
             .Select(s => new GuestSubtitleTrack(s.Index, (s.Language ?? "Unknown language") + (s.IsForced ? " · forced" : ""), s.Language)).ToArray();
         var duration = (video.RunTimeTicks ?? 0) / (double)TimeSpan.TicksPerSecond;
         var paused = member.PlayState.IsPaused;
@@ -58,7 +58,8 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
         if (paused)
         {
             Stop(party.Id);
-            return new { Playing = true, Paused = true, Title = video.Name, Position = position, Duration = duration, Offset = job?.Offset ?? position };
+            return new() { Playing = true, Paused = true, Title = Config.GuestPlayer.Allows("title") ? video.Name : null,
+                Position = position, Duration = duration, Offset = job?.Offset ?? position };
         }
         var bitrate = Config.GuestVideoBitrateKbps;
         var options = encoding.Options;
@@ -82,9 +83,9 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
             _jobs[party.Id] = job;
             _retryAfter.Remove(party.Id);
         }
-        return new { Playing = true, Paused = false, Title = video.Name, Position = position, Duration = duration,
-            Subtitles = tracks, SelectedSubtitleIndex = selectedIndex, BurnedSubtitleIndex = burnIndex,
-            job.Generation, job.Offset, job.Plan.PlaybackMethod, Ready = File.Exists(Path.Combine(job.Directory, "index.m3u8")) };
+        return new() { Playing = true, Paused = false, Title = Config.GuestPlayer.Allows("title") ? video.Name : null, Position = position, Duration = duration,
+            Subtitles = tracks, SelectedSubtitleIndex = Config.GuestPlayer.Allows("subtitles") ? selectedIndex : null, BurnedSubtitleIndex = burnIndex,
+            Generation = job.Generation, Offset = job.Offset, PlaybackMethod = job.Plan.PlaybackMethod, Ready = File.Exists(Path.Combine(job.Directory, "index.m3u8")) };
     }
 
     private StreamJob Start(Guid party, Video video, double offset, int bitrate, GuestEncodingPlan plan)
@@ -145,6 +146,7 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
     public GuestSubtitleRequest Subtitle(Party party, string generation, int index)
     {
         EnsureAvailable(party);
+        GuestPlayerPolicy.Require(Config.GuestPlayer, "subtitles");
         var owner = CheckOwner(party);
         if (!_jobs.TryGetValue(party.Id, out var job) || job.Generation != generation) throw new PartyException(404, "Stream unavailable.");
         var current = PlaybackMember(party);
@@ -179,7 +181,7 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
             && !user.Permissions.Any(p => p.Kind == PermissionKind.IsDisabled && p.Value)
             && user.Permissions.Any(p => p.Kind == PermissionKind.EnableMediaPlayback && p.Value);
     private SessionInfo? PlaybackMember(Party party) => sessions.Sessions.Where(s => party.Members.Contains(s.Id) && s.UserId != Guid.Empty
-            && Eligible(users.GetUserById(s.UserId)))
+            && party.CanControl(s.UserId) && Eligible(users.GetUserById(s.UserId)))
         .OrderByDescending(s => s.Id == party.HostSession).FirstOrDefault(s => s.NowPlayingItem is not null);
     private Jellyfin.Database.Implementations.Entities.User CheckOwner(Party party)
     {
@@ -240,3 +242,19 @@ public sealed class GuestMedia(PartyStore store, ISessionManager sessions, ILibr
 
 public sealed record GuestSubtitleTrack(int Index, string Label, string? Language);
 public sealed record GuestSubtitleRequest(Video Video, string SourceId, int Index, double Offset);
+public sealed record GuestPlaybackState
+{
+    public bool Playing { get; init; }
+    public bool Paused { get; init; }
+    public string? Title { get; init; }
+    public double Position { get; init; }
+    public double Duration { get; init; }
+    public double Offset { get; init; }
+    public string? Generation { get; init; }
+    public bool Ready { get; init; }
+    public string? PlaybackMethod { get; init; }
+    public GuestSubtitleTrack[] Subtitles { get; init; } = [];
+    public int? SelectedSubtitleIndex { get; init; }
+    public int? BurnedSubtitleIndex { get; init; }
+    public GuestPlayerView? Player { get; init; }
+}

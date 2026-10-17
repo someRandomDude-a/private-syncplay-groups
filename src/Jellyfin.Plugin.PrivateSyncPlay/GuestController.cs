@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Jellyfin.Plugin.PrivateSyncPlay;
 
 [ApiController, AllowAnonymous, Route("PrivateSyncPlay/Guest"), RequestSizeLimit(4096)]
-public sealed class GuestController(PartyStore store, GuestMedia media, Func<Configuration> configuration) : ControllerBase
+public sealed class GuestController(PartyStore store, GuestMedia media, Func<Configuration> configuration, GuestPlayerRegistry? player = null) : ControllerBase
 {
     private const string CookieName = "PrivateSyncPlay.Guest";
     private Configuration Config => configuration();
@@ -56,7 +56,12 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
             var party = store.GuestParty(Credential, Config);
             store.RateLimitGuest(Credential, "state", 120);
             store.GuestParty(Credential, Config, heartbeat: true);
-            return media.State(party);
+            var options = store.GuestOptions(Credential, Config);
+            var state = media.State(party);
+            return state with { Title = options.Allows("title") ? state.Title : null,
+                Subtitles = options.Allows("subtitles") ? state.Subtitles : [], SelectedSubtitleIndex = options.Allows("subtitles") ? state.SelectedSubtitleIndex : null,
+                Player = player?.View(options) ?? new(options.Features,
+                GuestPlayerRegistry.BuiltIn.Where(c => options.Controls.Contains(c.Id) && options.Allows(c.Feature)).ToArray()) };
         }
     }
     [HttpGet("media/{generation}/{name}")]
@@ -91,6 +96,7 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
         lock (store.Gate)
         {
             var party = store.GuestParty(credential, Config);
+            GuestPlayerPolicy.Require(store.GuestOptions(credential, Config), "subtitles");
             store.RateLimitGuest(credential, "subtitles", 30);
             partyId = party.Id;
             snapshot = media.Subtitle(party, generation, index);
@@ -99,6 +105,7 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
         lock (store.Gate)
         {
             var party = store.GuestParty(credential, Config);
+            GuestPlayerPolicy.Require(store.GuestOptions(credential, Config), "subtitles");
             var current = media.Subtitle(party, generation, index);
             if (party.Id != partyId || current.Video.Id != snapshot.Video.Id || current.SourceId != snapshot.SourceId || current.Offset != snapshot.Offset)
                 throw new PartyException(410, "Stream ended.");

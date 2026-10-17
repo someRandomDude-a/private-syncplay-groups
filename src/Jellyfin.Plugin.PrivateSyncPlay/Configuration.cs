@@ -27,9 +27,12 @@ public sealed class Configuration : BasePluginConfiguration
     public int GuestVideoBitrateKbps { get; set; } = 2000;
     public int MaxGuestStreams { get; set; } = 2;
     public List<UserSettings> Users { get; set; } = [];
+    public GuestPlayerOptions GuestPlayer { get; set; } = new();
 
     public void Validate()
     {
+        if (GuestPlayer is null) throw new ArgumentException("Guest player settings are required.");
+        GuestPlayer.Validate();
         if (!Enum.IsDefined(DefaultMode) || MaxViewers is < 1 or > 1000 || MaxInviteUses is < 1 or > 10000
             || GuestLeaseSeconds is < 10 or > 120 || GuestVideoBitrateKbps is < 256 or > 10000 || MaxGuestStreams is < 1 or > 32
             || Users is null || Users.Any(x => x is null) || Users.Select(x => x.UserId).Distinct().Count() != Users.Count

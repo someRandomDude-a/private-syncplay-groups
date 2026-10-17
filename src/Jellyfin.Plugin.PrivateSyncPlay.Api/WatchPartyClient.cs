@@ -8,7 +8,7 @@ namespace Jellyfin.Plugin.PrivateSyncPlay.Api;
 /// <summary>Registers the typed client in the consuming plugin's own assembly context.</summary>
 public static class WatchPartyClientExtensions
 {
-    /// <summary>Registers IWatchPartyService using a versioned in-process DI bridge, not HTTP or reflection.</summary>
+    /// <summary>Registers the single current .NET scripting client for all party operations, without HTTP or reflection.</summary>
     /// <param name="services">The collection provided to IPluginServiceRegistrator.RegisterServices.</param><returns>The collection for chaining.</returns>
     public static IServiceCollection AddPrivateSyncPlayClient(this IServiceCollection services)
     {
@@ -21,8 +21,8 @@ public static class WatchPartyClientExtensions
 /// <param name="services">Jellyfin's service provider; resolved only after all plugin registration has completed.</param>
 public sealed class WatchPartyClient(IServiceProvider services) : IWatchPartyService
 {
-    /// <summary>Version 1 DI key. The registered delegate uses only framework types to preserve cross-plugin type identity.</summary>
-    public const string ServiceKey = "Jellyfin.Plugin.PrivateSyncPlay.Api.v1";
+    /// <summary>Current API contract key. Only the matching SDK/provider contract is supported; no older-key fallback is attempted.</summary>
+    public const string ServiceKey = "Jellyfin.Plugin.PrivateSyncPlay.Api.1.1";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     { Converters = { new JsonStringEnumConverter() } };
     private Func<Guid, string, string, string, CancellationToken, Task<string>>? Handler
@@ -38,7 +38,7 @@ public sealed class WatchPartyClient(IServiceProvider services) : IWatchPartySer
         try
         {
             token.ThrowIfCancellationRequested();
-            var handler = Handler ?? throw new WatchPartyException(503, "Private SyncPlay API v1 is not installed or enabled.");
+            var handler = Handler ?? throw new WatchPartyException(503, "The matching Private SyncPlay .NET API is not installed or enabled.");
             var response = await handler(userId, sessionId, operation, JsonSerializer.Serialize(request, Json), token).ConfigureAwait(false);
             if (response is null || response.Length > 1024 * 1024) throw new JsonException();
             using var json = JsonDocument.Parse(response);
@@ -55,7 +55,7 @@ public sealed class WatchPartyClient(IServiceProvider services) : IWatchPartySer
         catch (Exception)
         {
             // Provider activation, load-context mismatch and malformed replies are contained at the API boundary.
-            throw new WatchPartyException(503, "Private SyncPlay API v1 could not complete this request.");
+            throw new WatchPartyException(503, "Private SyncPlay .NET API could not complete this request.");
         }
     }
     private async Task Command(Guid userId, string sessionId, string operation, object request, CancellationToken token)
@@ -87,4 +87,25 @@ public sealed class WatchPartyClient(IServiceProvider services) : IWatchPartySer
     /// <inheritdoc />
     public Task EndPartyAsync(Guid userId, string sessionId, Guid partyId, CancellationToken cancellationToken = default)
         => Command(userId, sessionId, "EndParty", new { partyId }, cancellationToken);
+    /// <inheritdoc />
+    public Task<WatchPartyManagement> GetManagementAsync(Guid userId, string sessionId, Guid partyId, CancellationToken cancellationToken = default)
+        => Call<WatchPartyManagement>(userId, sessionId, "GetManagement", new { partyId }, cancellationToken);
+    /// <inheritdoc />
+    public Task UpdatePolicyAsync(Guid userId, string sessionId, Guid partyId, WatchPartyPolicy policy, CancellationToken cancellationToken = default)
+        => Command(userId, sessionId, "UpdatePolicy", new { partyId, policy }, cancellationToken);
+    /// <inheritdoc />
+    public Task SetAccountPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyAccountPermissions permissions, CancellationToken cancellationToken = default)
+        => Command(userId, sessionId, "SetAccountPermissions", new { partyId, participantId, permissions }, cancellationToken);
+    /// <inheritdoc />
+    public Task SetGuestPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyGuestPermissions options, CancellationToken cancellationToken = default)
+        => Command(userId, sessionId, "SetGuestPermissions", new { partyId, participantId, options }, cancellationToken);
+    /// <inheritdoc />
+    public Task KickAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
+        => Command(userId, sessionId, "KickAccount", new { partyId, participantId }, cancellationToken);
+    /// <inheritdoc />
+    public Task KickGuestAndRevokeInviteAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
+        => Command(userId, sessionId, "KickGuestAndRevokeInvite", new { partyId, participantId }, cancellationToken);
+    /// <inheritdoc />
+    public Task UnblockAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
+        => Command(userId, sessionId, "UnblockAccount", new { partyId, participantId }, cancellationToken);
 }

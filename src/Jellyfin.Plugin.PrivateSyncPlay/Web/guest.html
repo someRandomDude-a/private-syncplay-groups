@@ -6,9 +6,9 @@
 <!--JELLYFIN_THEME-->
 <link id="privateSyncPlayCss" rel="stylesheet" href="assets/ui.css">
 <link rel="stylesheet" href="../Branding/Css">
-<script defer src="assets/ui.js"></script><script defer src="assets/hls.js"></script><script defer src="assets/guest.js"></script>
+<script defer src="assets/ui.js"></script><script defer src="assets/hls.js"></script><script defer src="assets/guest-player.js"></script><!--GUEST_PREVIEW--><script defer src="assets/guest.js"></script>
 </head>
-<body dir="ltr" class="skinBody privateSyncPlayGuest">
+<body dir="ltr" class="skinBody privateSyncPlayGuest" data-guest-preview="{{PREVIEW}}">
 <main class="privateSyncPlayContent content-primary">
 <h1 class="sectionTitle">Watch party</h1>
 <p id="status" class="fieldDescription" role="status" aria-live="polite">You have been invited to watch a party.</p>
@@ -25,19 +25,19 @@
 <button is="emby-button" id="play" type="button" class="emby-button raised button-submit privateSyncPlayEnablePlayback" hidden><span>Enable playback</span></button>
 <div class="videoOsdBottom videoOsdBottom-maincontrols">
 <div class="osdControls">
-<div class="osdTextContainer osdMainTextContainer"><h2 id="playerStatus" class="osdTitle" role="status" aria-live="polite">Waiting for party…</h2></div>
-<div class="privateSyncPlayPositionRow" dir="ltr"><span id="position" class="osdTextContainer osdPositionText">0:00</span>
+<div class="osdTextContainer osdMainTextContainer" data-guest-feature="title"><h2 id="playerStatus" class="osdTitle" role="status" aria-live="polite">Waiting for party…</h2></div>
+<div class="privateSyncPlayPositionRow" dir="ltr" data-guest-feature="position"><span id="position" class="osdTextContainer osdPositionText">0:00</span>
 <div id="progress" class="sliderContainer privateSyncPlayProgress" role="progressbar" aria-label="Party playback position (read only)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="mdl-slider-background-lower" id="positionProgress"></div></div>
 <span id="duration" class="osdTextContainer osdDurationText">0:00</span></div>
-<div class="buttons focuscontainer-x privateSyncPlayPlayerButtons">
-<div class="volumeButtons"><button is="paper-icon-button-light" type="button" id="mute" class="paper-icon-button-light buttonMute autoSize" title="Mute (M)" aria-label="Mute" aria-pressed="false"><span id="muteIcon" class="xlargePaperIconButton material-icons volume_up" aria-hidden="true"></span></button>
-<label class="privateSyncPlayVolumeLabel" for="volume">Volume</label><div class="sliderContainer osdVolumeSliderContainer">
+<div id="guestPlayerToolbar" class="buttons focuscontainer-x privateSyncPlayPlayerButtons">
+<div class="volumeButtons" data-guest-control="mute"><button is="paper-icon-button-light" type="button" id="mute" class="paper-icon-button-light buttonMute autoSize" title="Mute (M)" aria-label="Mute" aria-pressed="false"><span id="muteIcon" class="xlargePaperIconButton material-icons volume_up" aria-hidden="true"></span></button></div>
+<div class="volumeButtons" data-guest-control="volume"><label class="privateSyncPlayVolumeLabel" for="volume">Volume</label><div class="sliderContainer osdVolumeSliderContainer">
 <div class="mdl-slider-container"><input is="emby-slider" data-embyslider="true" id="volume" aria-label="Volume" class="mdl-slider mdl-js-slider mdl-slider-hoverthumb osdVolumeSlider" type="range" min="0" max="1" step="0.05" value="1">
 <div class="mdl-slider-background-flex-container" aria-hidden="true"><div class="mdl-slider-background-flex"><div class="mdl-slider-background-flex-inner">
 <div class="mdl-slider-background-upper"></div><div id="volumeProgress" class="mdl-slider-background-lower"></div>
 </div></div></div></div></div></div>
-<button is="paper-icon-button-light" id="subtitlesButton" type="button" class="paper-icon-button-light btnSubtitles autoSize" title="Subtitles (C)" aria-label="Subtitles" aria-expanded="false" aria-controls="subtitleSettings"><span class="xlargePaperIconButton material-icons closed_caption" aria-hidden="true"></span></button>
-<button is="paper-icon-button-light" id="fullscreen" type="button" class="paper-icon-button-light btnFullscreen autoSize" title="Fullscreen (F)" aria-label="Enter fullscreen"><span id="fullscreenIcon" class="xlargePaperIconButton material-icons fullscreen" aria-hidden="true"></span></button>
+<button is="paper-icon-button-light" id="subtitlesButton" data-guest-control="subtitles" type="button" class="paper-icon-button-light btnSubtitles autoSize" title="Subtitles (C)" aria-label="Subtitles" aria-expanded="false" aria-controls="subtitleSettings"><span class="xlargePaperIconButton material-icons closed_caption" aria-hidden="true"></span></button>
+<button is="paper-icon-button-light" id="fullscreen" data-guest-control="fullscreen" type="button" class="paper-icon-button-light btnFullscreen autoSize" title="Fullscreen (F)" aria-label="Enter fullscreen"><span id="fullscreenIcon" class="xlargePaperIconButton material-icons fullscreen" aria-hidden="true"></span></button>
 </div>
 <div id="subtitleSettings" class="verticalSection" hidden><div class="selectContainer"><label class="selectLabel" for="subtitles">Subtitles</label><select is="emby-select" id="subtitles" class="emby-select emby-select-withcolor"><option value="-1">Off</option></select><div class="selectArrowContainer"><span class="selectArrow material-icons keyboard_arrow_down" aria-hidden="true"></span></div></div>
 <p id="subtitleStatus" class="fieldDescription" role="status"></p></div>

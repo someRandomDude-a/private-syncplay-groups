@@ -11,16 +11,20 @@
 .privateSyncPlayDialog .dialogContentInner { padding-block-end: 1.5em; }
 .privateSyncPlayDialog .privateSyncPlayClose { margin-inline-start: auto; }
 .privateSyncPlayDialog .listItemBody { min-inline-size: 0; overflow-wrap: anywhere; }
+.privateSyncPlayDialog .privateSyncPlayTableScroll { overflow-x: auto; }
+.privateSyncPlayDialog .privateSyncPlayParticipants { min-inline-size: 34em; }
+.privateSyncPlayDialog .privateSyncPlayParticipants td, .privateSyncPlayDialog .privateSyncPlayParticipants th { vertical-align: top; }
+.privateSyncPlayDialog .privateSyncPlayParticipants .checkboxContainer { margin-block: .5em; }
 .privateSyncPlayGuest { margin: 0; }
 .privateSyncPlayGuest .privateSyncPlayContent { max-inline-size: 70em; margin-inline: auto; padding: 1.5em; }
-.privateSyncPlayGuest #videoOsdPage { position: relative; inset: auto; margin: 1em 0; inline-size: 100%; block-size: auto; min-block-size: 18em; aspect-ratio: 16/9; overflow: hidden; }
+.privateSyncPlayGuest #videoOsdPage { position: relative; inset: auto; margin: 1em 0; padding: 0; box-sizing: border-box; inline-size: 100%; block-size: auto; min-block-size: 18em; aspect-ratio: 16/9; overflow: hidden; }
 .privateSyncPlayGuest .privateSyncPlayVideo { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: contain; }
-.privateSyncPlayPlayer .videoOsdBottom { position: absolute; inset-block-end: 0; inset-inline: 0; }
+.privateSyncPlayPlayer .videoOsdBottom { position: absolute; inset-block-end: 0; inset-inline: 0; box-sizing: border-box; padding-block-start: clamp(.5em, 5vh, 2em); padding-block-end: .5em; max-block-size: calc(100% - 3em); overflow-y: auto; }
 .privateSyncPlayPlayer .privateSyncPlayPlayerHeader { position: absolute; inset-block-start: 0; inset-inline: 0; display: flex; align-items: center; padding: .5em; }
 .privateSyncPlayPlayer .osdControls { padding: .5em 1em; }
 .privateSyncPlayPlayer .privateSyncPlayPlayerButtons, .privateSyncPlayPlayer .volumeButtons, .privateSyncPlayPositionRow { display: flex; align-items: center; gap: .5em; }
 .privateSyncPlayPlayer .privateSyncPlayPlayerButtons { flex-wrap: wrap; justify-content: flex-end; }
-.privateSyncPlayPlayer .volumeButtons { margin-inline-end: auto; }
+.privateSyncPlayPlayer .volumeButtons { margin-inline-end: 0; }
 .privateSyncPlayPlayer .osdVolumeSliderContainer { inline-size: clamp(5em, 15vw, 10em); }
 .privateSyncPlayPlayer .privateSyncPlayProgress { position: relative; flex: 1; block-size: .25em; overflow: hidden; pointer-events: none; }
 .privateSyncPlayPlayer .privateSyncPlayProgress > div { block-size: 100%; inline-size: 0; }
@@ -51,3 +55,17 @@
 .privateSyncPlaySettings .privateSyncPlayVisuallyHidden, .privateSyncPlaySettings .privateSyncPlaySelectCell .checkboxLabel,
 .privateSyncPlaySettings .privateSyncPlayUserTable .selectLabel { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
 .privateSyncPlaySettings [hidden] { display: none !important; }
+.privateSyncPlayGuest [hidden] { display: none !important; }
+.privateSyncPlayDesigner .privateSyncPlayDesignerGrid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(16em, 1fr); gap: 1.5em; margin-block: 1em; }
+.privateSyncPlayDesigner .privateSyncPlayPlayerPreview { inline-size: 100%; aspect-ratio: 16/9; border: 0; }
+.privateSyncPlayDesigner .privateSyncPlayDesignerControl { display: flex; flex-wrap: wrap; gap: .5em; align-items: center; }
+.privateSyncPlayDesigner .privateSyncPlayDesignerControl > button { inline-size: auto; }
+.privateSyncPlayDesigner .privateSyncPlayDesignerControl > button:first-child { margin-inline-end: auto; }
+.privateSyncPlayDesigner .privateSyncPlayDesignerCanvas { min-inline-size: 0; }
+.privateSyncPlayDesigner .privateSyncPlayPreviewViewport { overflow: auto; }
+.privateSyncPlayPreview .privateSyncPlayContent { padding: 0; max-inline-size: none; }
+.privateSyncPlayGuest.privateSyncPlayPreview #videoOsdPage { margin: 0; block-size: 100dvh; min-block-size: 0; aspect-ratio: auto; }
+.privateSyncPlayPreview .privateSyncPlayContent > p { display: none; }
+.privateSyncPlayEditing [data-guest-feature]:hover { outline: 1px dashed currentColor; outline-offset: 2px; }
+.privateSyncPlayEditing .privateSyncPlaySelected { outline: 2px solid currentColor; outline-offset: 2px; }
+@media (max-width: 65em) { .privateSyncPlayDesigner .privateSyncPlayDesignerGrid { grid-template-columns: minmax(0, 1fr); } }

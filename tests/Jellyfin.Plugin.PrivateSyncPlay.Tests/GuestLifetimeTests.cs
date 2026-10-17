@@ -73,5 +73,16 @@ public sealed class GuestLifetimeTests : IDisposable
         Assert.Equal(429, Assert.Throws<PartyException>(() => _store.RateLimitGuest(_guest, "state", 120)).Status);
         _store.RateLimitGuest(new string('B', 64), "state", 120);
     }
+    [Fact] public void ReadOnlyAccountCannotDriveGuestMediaThroughNormalSessionProgressReports()
+    {
+        _owner.SyncPlayAccess = SyncPlayUserAccessType.CreateAndJoinGroups; _friend.SyncPlayAccess = SyncPlayUserAccessType.CreateAndJoinGroups;
+        _owner.Permissions.Add(new Permission(PermissionKind.EnableMediaPlayback, true)); _friend.Permissions.Add(new Permission(PermissionKind.EnableMediaPlayback, true));
+        var sessions = Mock.Of<ISessionManager>();
+        _sessions.Clear(); _sessions.Add(new SessionInfo(sessions, NullLogger.Instance) { Id = "friend", UserId = _friend.Id,
+            NowPlayingItem = new MediaBrowser.Model.Dto.BaseItemDto { Id = Guid.NewGuid() } });
+        _party.Members.Add("friend"); _store.RemoveSession("host"); _party.Account(_friend.Id).ControlPlayback = false;
+        var state = _media.State(_party);
+        Assert.False(state.Playing); Assert.Same(_party, _store.GuestParty(_guest, _config));
+    }
     public void Dispose() => _media.Dispose();
 }

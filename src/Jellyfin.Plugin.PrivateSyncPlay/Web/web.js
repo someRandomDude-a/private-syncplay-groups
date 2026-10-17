@@ -43,9 +43,83 @@
         const button = UI.button(label, parent, run, kind); if (id) button.dataset.pspAction = id; return button;
     }
     function description(text, parent) { return UI.element('p', text, parent, 'fieldDescription'); }
+    function confirm(title, text, run) {
+        const popup = UI.dialog(title); description(text, popup.content);
+        action('Cancel', popup.content, () => popup.dialog.close());
+        action('Confirm', popup.content, async () => { await run(); popup.dialog.close(); }, 'delete');
+        popup.dialog.showModal();
+    }
+    function ownerManagement(me, content, data) {
+        const base = 'PrivateSyncPlay/Groups/' + me.party.id;
+        UI.element('h3', 'Party permissions', content, 'sectionTitle');
+        description('These restrictions apply to this party only. The owner retains control; Jellyfin account permissions and administrator limits cannot be increased here.', content);
+        const joins = UI.field('Accept new viewers', 'checkbox', data.policy.allowJoins, content);
+        const guests = UI.field('Allow guest access', 'checkbox', data.policy.allowGuests, content);
+        description('Disabling guest access disconnects existing guests and permanently revokes guest-enabled invitation links. Locking new viewers keeps existing viewers connected.', content);
+        const control = UI.field('Allow participants to control playback', 'checkbox', data.policy.participantsControlPlayback, content);
+        const queue = UI.field('Allow participants to edit the queue (requires playback control)', 'checkbox', data.policy.participantsEditQueue, content);
+        const capacity = UI.field('Party viewer limit', 'number', data.capacity, content); capacity.min = 1; capacity.max = me.maxViewers; capacity.required = true;
+        UI.element('h4', 'Allowed guest features', content, 'sectionTitle');
+        description('Guest features can only be restricted, never expanded beyond the administrator’s allowlist. Volume and fullscreen are local browser options; caption access is checked server-side.', content);
+        const names = { title:'Video title', position:'Read-only position', volume:'Local volume', mute:'Mute', subtitles:'Text subtitles', fullscreen:'Fullscreen' };
+        const featureInputs = (parent, allowed, enabled, prefix) => allowed.map(feature => ({ feature,
+            input:UI.field(names[feature] || feature, 'checkbox', enabled.includes(feature), parent, prefix + '-' + feature) }));
+        const partyFeatures = featureInputs(content, data.allowedGuestFeatures, data.policy.guestFeatures, 'pspPartyFeature');
+        action('Save party permissions', content, async () => {
+            if (!capacity.reportValidity()) return;
+            const save = async () => { await request(base + '/Policy', 'POST', { AllowJoins:joins.checked, AllowGuests:guests.checked,
+                ParticipantsControlPlayback:control.checked, ParticipantsEditQueue:queue.checked, MaxViewers:Number(capacity.value),
+                GuestFeatures:partyFeatures.filter(f => f.input.checked).map(f => f.feature) }); await show(); };
+            if (data.policy.allowGuests && !guests.checked) confirm('Disable guest access?', 'All current guests will be disconnected and their guest-enabled invitation links revoked. Re-enabling access will not restore those sessions or links.', save);
+            else await save();
+        }, 'primary', 'save-party-permissions');
+        UI.element('h3', 'Participants', content, 'sectionTitle');
+        description('Account permissions apply to all devices of that account in this party. Read-only participants cannot stall the group with buffering reports. Queue editing also requires playback control.', content);
+        const scroll = UI.element('div', null, content, 'privateSyncPlayTableScroll'); scroll.tabIndex = 0; scroll.setAttribute('role','region'); scroll.setAttribute('aria-label','Party participants');
+        const table = UI.element('table', null, scroll, 'detailTable privateSyncPlayParticipants');
+        UI.element('caption', 'Current party participants', table, 'fieldDescription');
+        const head = UI.element('tr', null, UI.element('thead', null, table));
+        for (const label of ['Participant','Type / devices','Permissions','Actions']) UI.element('th', label, head, 'detailTableHeaderCell').scope = 'col';
+        const body = UI.element('tbody', null, table);
+        for (const p of data.participants) {
+            const row = UI.element('tr', null, body, 'listItem-border'); row.dataset.participant = p.id;
+            UI.element('th', p.name + (p.isOwner ? ' (owner)' : ''), row, 'detailTableBodyCell').scope = 'row';
+            UI.element('td', p.kind === 'guest' ? 'Guest' : `Account · ${p.sessions} device(s)`, row, 'detailTableBodyCell');
+            const permissions = UI.element('td', null, row, 'detailTableBodyCell'), actions = UI.element('td', null, row, 'detailTableBodyCell');
+            const path = base + '/Participants/' + p.id;
+            if (p.isOwner) { description('Owner control', permissions); continue; }
+            if (p.kind === 'account') {
+                const playback = UI.field('Playback — ' + p.name, 'checkbox', p.playbackAllowed, permissions);
+                const edits = UI.field('Queue editing — ' + p.name, 'checkbox', p.queueAllowed, permissions);
+                playback.disabled = !data.policy.participantsControlPlayback;
+                const checkQueue = () => edits.disabled = playback.disabled || !playback.checked || !data.policy.participantsEditQueue;
+                playback.onchange = checkQueue; checkQueue();
+                action('Save permissions', actions, async () => { await request(path + '/Permissions', 'POST', {Kind:'account',ControlPlayback:playback.checked,EditQueue:edits.checked}); await show(); }, 'default', 'save-member-permissions');
+                action('Kick and block', actions, () => confirm('Remove ' + p.name + '?', 'All of this account’s devices will leave the party and be blocked from rejoining it by code, invitation or the public list. This does not ban their Jellyfin account.', async () => { await request(path, 'DELETE'); await show(); }), 'delete', 'kick-member');
+            } else {
+                const checks = featureInputs(permissions, data.allowedGuestFeatures, p.guestFeatures, 'pspGuest-' + p.id);
+                checks.forEach(f => f.input.disabled = !data.policy.guestFeatures.includes(f.feature));
+                action('Save permissions', actions, async () => { await request(path + '/Permissions', 'POST', {Kind:'guest',GuestFeatures:checks.filter(f => f.input.checked && !f.input.disabled).map(f => f.feature)}); await show(); }, 'default', 'save-guest-permissions');
+                action('Use party defaults', actions, async () => { await request(path + '/Permissions', 'POST', {Kind:'guest',GuestFeatures:null}); await show(); });
+                action('Kick and revoke link', actions, () => confirm('Remove this guest?', `The guest’s invitation will be revoked. ${p.sharedInviteViewers} guest session(s) using that same link will be disconnected, and the link can no longer admit anyone. Anonymous people cannot be identified across new browsers or new invitations.`, async () => { await request(path, 'DELETE'); await show(); }), 'delete', 'kick-guest');
+            }
+        }
+        if (data.blocked.length) {
+            UI.element('h3', 'Blocked from this party', content, 'sectionTitle');
+            for (const account of data.blocked) {
+                const row = UI.element('div', null, content, 'listItem listItem-border'); UI.element('div', account.name, row, 'listItemBody');
+                action('Allow rejoining', row, async () => { await request(base + '/Blocked/' + account.id + '/Unblock', 'POST', {}); await show(); });
+            }
+        }
+        action('Refresh participants', content, show, 'default', 'refresh-participants');
+        action('End party for everyone', content, () => confirm('End this party?', 'All participants will leave, invitations will be revoked, and guest streams will end.', async () => {
+            await request(base, 'DELETE'); current?.dialog.close();
+        }), 'delete', 'end-party');
+    }
     async function show() {
         const me = await request('PrivateSyncPlay/Me');
         const groups = me.party ? [] : await request('SyncPlay/List');
+        const management = me.party?.isOwner ? await request('PrivateSyncPlay/Groups/' + me.party.id + '/Management') : null;
         current?.dialog.close();
         current = UI.dialog('Watch parties');
         const { content, dialog, feedback } = current;
@@ -55,8 +129,10 @@
                 await navigator.clipboard.writeText(me.party.code); UI.message(feedback, 'Join code copied.');
             });
             if (me.party.isOwner) {
+                ownerManagement(me, content, management);
+                UI.element('h3', 'Create invitation', content, 'sectionTitle');
                 const guests = UI.field('Allow guests', 'checkbox', false, content);
-                guests.disabled = !me.canInviteGuests || location.protocol !== 'https:';
+                guests.disabled = !me.canInviteGuests || me.party.allowGuests === false || location.protocol !== 'https:';
                 if (!me.canInviteGuests) description('Guest invites are disabled by your administrator.', content);
                 else if (location.protocol !== 'https:') description('Open Jellyfin over HTTPS to create usable guest invite links.', content);
                 const uses = UI.field('Maximum invite uses', 'number', me.maxInviteUses, content); uses.min = '1'; uses.max = me.maxInviteUses;
@@ -84,7 +160,7 @@
                         revoke.className = 'emby-button button-flat listItemButton';
                     }
                 }
-            }
+            } else description(`Your party permissions: playback ${me.party.canControlPlayback ? 'allowed' : 'read only'}; queue editing ${me.party.canEditQueue ? 'allowed' : 'not allowed'}.`, content);
             action('Leave party', content, async () => { await request('SyncPlay/Leave', 'POST'); dialog.close(); }, 'default', 'leave-party');
         } else {
             if (groups.length) {

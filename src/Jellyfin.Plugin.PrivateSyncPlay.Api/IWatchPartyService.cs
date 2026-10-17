@@ -1,10 +1,10 @@
 namespace Jellyfin.Plugin.PrivateSyncPlay.Api;
 
-/// <summary>Versioned, policy-enforcing watch-party operations for server plugins.</summary>
+/// <summary>The current typed .NET scripting API for party, invitation, permission and moderation operations.</summary>
 /// <remarks>Actors must be derived from the calling plugin's authenticated context. No operation creates a login or synthetic session.</remarks>
 public interface IWatchPartyService
 {
-    /// <summary>Gets whether a version 1 provider is registered. Operations may still fail if it is not ready.</summary>
+    /// <summary>Gets whether the matching current API provider is registered. Operations may still fail if it is not ready.</summary>
     bool IsAvailable { get; }
 
     /// <summary>Gets the caller's current party, or null if its active session is not in a party.</summary>
@@ -54,6 +54,45 @@ public interface IWatchPartyService
     /// <param name="userId">Authenticated actor's user ID.</param><param name="sessionId">Actor's active Jellyfin session.</param><param name="partyId">Party identifier.</param>
     /// <param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
     Task EndPartyAsync(Guid userId, string sessionId, Guid partyId, CancellationToken cancellationToken = default);
+
+    /// <summary>Gets a detached owner-only policy/participant snapshot. Requires the owner in an active session in this exact party.</summary>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Owner's active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="cancellationToken">Cancellation before the operation starts.</param><returns>A snapshot without invitation tokens or guest credentials.</returns>
+    Task<WatchPartyManagement> GetManagementAsync(Guid userId, string sessionId, Guid partyId, CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces party policy without changing administrator settings or per-participant overrides.</summary>
+    /// <remarks>Read-modify-write the current Policy with a with-expression. Disabling guests permanently revokes guest-enabled links and their leases.</remarks>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="policy">Complete party policy. Null guest features inherit administrator policy.</param><param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
+    Task UpdatePolicyAsync(Guid userId, string sessionId, Guid partyId, WatchPartyPolicy policy, CancellationToken cancellationToken = default);
+
+    /// <summary>Sets permissions for all devices of one account in this party; cannot demote the owner or bypass party/admin ceilings.</summary>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="participantId">Account participant ID from the management snapshot, not a Jellyfin user ID.</param><param name="permissions">Playback/queue permissions; queue editing also requires playback.</param>
+    /// <param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
+    Task SetAccountPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyAccountPermissions permissions, CancellationToken cancellationToken = default);
+
+    /// <summary>Narrows optional features for one current guest lease, or resets it to party inheritance.</summary>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="participantId">Guest participant ID from the snapshot.</param><param name="options">Null Features inherits; an empty collection disables all optional features.</param>
+    /// <param name="cancellationToken">Cancellation before mutation.</param><returns>Completion. Guests never gain account or SyncPlay privileges.</returns>
+    Task SetGuestPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyGuestPermissions options, CancellationToken cancellationToken = default);
+
+    /// <summary>Removes all of an account's devices and blocks rejoining this party. Does not ban the Jellyfin account.</summary>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="participantId">Account participant ID; guest IDs are rejected to avoid accidentally revoking a shared link.</param><param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
+    Task KickAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default);
+
+    /// <summary>Revokes a guest's admission invitation and disconnects ALL guest leases admitted by that same invitation.</summary>
+    /// <remarks>Confirm the shared-link effect with the caller. Anonymous identity across new browsers/new invitations cannot be established. Account IDs are rejected.</remarks>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="participantId">Guest participant ID from a fresh snapshot.</param><param name="cancellationToken">Cancellation before mutation.</param><returns>Completion; the link cannot admit new guests or accounts.</returns>
+    Task KickGuestAndRevokeInviteAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default);
+
+    /// <summary>Allows an account to rejoin this party. Does not automatically rejoin it, restore permissions, or redeem a link.</summary>
+    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
+    /// <param name="participantId">ID from BlockedAccounts.</param><param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
+    Task UnblockAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Group visibility independent of the server plugin's implementation types.</summary>

@@ -29,5 +29,7 @@ assert.match(filename,/^PrivateSyncPlay-\d+\.\d+\.\d+\.zip$/);
 const checksum=createHash('md5').update(await readFile(join(folder,filename))).digest('hex');
 assert.equal(release.checksum,checksum,'Catalog checksum does not match its exact release ZIP');
 assert(Number.isFinite(Date.parse(release.timestamp)));
-assert((await readFile(join(folder,'PrivateSyncPlay.Api-1.0.0.zip'))).length>0);
+const sdkProject=await readFile('src/Jellyfin.Plugin.PrivateSyncPlay.Api/Jellyfin.Plugin.PrivateSyncPlay.Api.csproj','utf8');
+const sdkVersion=sdkProject.match(/<Version>([^<]+)<\/Version>/)?.[1];assert(sdkVersion,'SDK version must be explicit');
+assert((await readFile(join(folder,`PrivateSyncPlay.Api-${sdkVersion}.zip`))).length>0);
 console.log('PASS plugin repository schema, ABI, release asset URL, real ZIP checksum and SDK archive');

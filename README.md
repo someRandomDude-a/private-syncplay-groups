@@ -34,7 +34,7 @@ This follows Jellyfin's [third-party repository method](https://jellyfin.org/doc
 
 Do not add the SDK ZIP, a GitHub `/blob/…` page, source metadata, or a local filesystem path as a repository. If no plugin appears, check the JSON has a nonempty `versions` array, the repository is enabled, the server is the supported latest version, and its network can reach GitHub. Jellyfin logs manifest/download/checksum failures. Current releases are filtered out on older servers by the target ABI; copying DLLs manually does not bypass the runtime version check.
 
-For manual installation, download **`PrivateSyncPlay-X.Y.Z.zip`** from [GitHub Releases](https://github.com/someRandomDude-a/private-syncplay-groups/releases), extract it into a `PrivateSyncPlay` folder inside Jellyfin's plugins directory, and restart. Keep **both** `Jellyfin.Plugin.PrivateSyncPlay.dll` and `Jellyfin.Plugin.PrivateSyncPlay.Api.dll` together. The separate `PrivateSyncPlay.Api-1.0.0.zip` asset is a developer SDK, not a Jellyfin catalog plugin.
+For manual installation, download **`PrivateSyncPlay-X.Y.Z.zip`** from [GitHub Releases](https://github.com/someRandomDude-a/private-syncplay-groups/releases), extract it into a `PrivateSyncPlay` folder inside Jellyfin's plugins directory, and restart. Keep **both** `Jellyfin.Plugin.PrivateSyncPlay.dll` and `Jellyfin.Plugin.PrivateSyncPlay.Api.dll` together. The separate `PrivateSyncPlay.Api-1.1.0.zip` asset is a developer SDK, not a Jellyfin catalog plugin.
 
 ### Version history and updates
 
@@ -107,6 +107,20 @@ The isolated guest player loads **stylesheets only** from the installed Jellyfin
 
 Native skin selectors are supported, but arbitrary CSS that hides controls or completely replaces Jellyfin's DOM can still break them. Skins targeting only unrelated MUI components may need the same legacy control selectors used by ordinary Jellyfin plugin configuration pages. Test your chosen skin in Modern/Legacy layouts and at mobile sizes.
 
+### Live guest player designer
+
+Open **Dashboard → Plugins → Private SyncPlay → Guest player designer**. Its canvas runs the **same guest HTML, renderer, and local controls** as the real guest page, with an animated video generated locally—not a screenshot, signed-in player, or private-library preview. Installed native styles and server branding CSS are used in both places. The preview has an opaque sandbox origin and cannot call guest/account APIs or read the administrator's storage. Caption selection, mute/volume, and fullscreen can be explored directly.
+
+- Check the explicitly allowed features; unchecking a feature removes its controls. Unknown or future features are not automatically granted.
+- Click a canvas control or list entry to select/remove it. Drag toolbar controls on the canvas/list to reorder, or use **Move up/down** for keyboard editing. Title and read-only position retain their normal native player slots rather than arbitrary pixel positioning that would break responsive themes.
+- Choose **Fit canvas**, **Wide player**, or **Narrow player** to explore the actual responsive layout. Jellyfin's native mobile CSS may hide controls such as volume at narrow widths; the wide preview allows inspecting those controls on desktop.
+- Add approved native or contributed plugin controls using the chooser. Removing the last control for a feature disables that feature. Leaving, playback admission, and the browser's autoplay-unlock action cannot be removed.
+- **Undo/Redo**, **Reset default layout**, and **Discard unsaved layout** affect only the draft. **Save guest player** merges this page's settings with the latest server configuration without overwriting user permissions. Active players receive the new policy on their next state poll.
+
+Guest routes use a closed server-side operation allowlist. In particular, disabling text subtitle selection blocks the VTT endpoint even when called directly and rechecks permission after conversion; it is not merely a hidden button. Local volume, mute and fullscreen are browser presentation options: no server can prevent a viewer from changing their device volume, recording or pausing already-delivered bytes. Synchronization timestamps still have to reach the client when their display is hidden. Host-selected subtitles burned into the shared video remain part of that video.
+
+This is an isolated **guest adapter**, not the authenticated Jellyfin Web app with buttons hidden. Arbitrary scripts that patch the authenticated playback manager do not automatically run for guests. Other plugins can contribute opt-in, declarative native controls through the [guest UI SDK](docs/plugin-api.md#guest-safe-player-controls); controls bind only to existing local guest actions, never arbitrary JavaScript, HTML, media URLs, or server commands. Their actual themed controls render in the live canvas. Universal compatibility with arbitrary DOM-replacing themes or authenticated player plugins is not promised.
+
 ## Administrator settings
 
 | Setting | Default | Behavior |
@@ -127,6 +141,18 @@ Each user can inherit or restrict public/private creation, override the default 
 The **User overrides** table supports name search, per-row editing, and checkbox selection (the header checkbox selects all currently visible users). Open **Bulk edit selected** and check only the fields you want to change; unchecked fields stay untouched. Selected users hidden by search are still included, with their count shown above the table. **Reset** on a row, **Reset selected to defaults**, and **Reset all user overrides** remove explicit overrides so users inherit the current server defaults; they do not reset server settings. Reset-all requires confirmation and also clears saved entries for users no longer listed. Permission actions support one-step undo, and **Discard unsaved changes** reloads the saved configuration. All changes and resets remain drafts until **Save**.
 
 Only the party owner can issue or revoke links. Revoking a link disconnects guests admitted by that link. Existing signed-in participants keep their normal membership. An admin can end a party through the API. Limits describe **sessions**, not verified unique humans; anonymous identity and physical viewers cannot be proven.
+
+### Owner moderation
+
+The owner's **Watch parties** dialog includes a native-styled participant table and party-only controls:
+
+- Lock/unlock new viewers, disable guest access, adjust the viewer cap within the administrator's limit, and end the party for everyone.
+- Restrict signed-in participants' playback and queue permissions, with both party-wide ceilings and per-account switches. Queue editing requires playback permission to prevent queue changes becoming an indirect seek/skip bypass. Account permissions apply to every device of that account in this party and survive leaving/rejoining it.
+- Narrow the allowed guest features for the party or for one current guest lease; **Use party defaults** resets that guest's overrides. Effective features are the intersection of administrator, party, and guest allowlists. Guests never gain pause/seek/queue/account privileges. Optional subtitle access is checked server-side before and after conversion; local browser presentation options remain local.
+- **Kick and block** removes all of a signed-in account's sessions and blocks rejoining this party by public list, code, or invitation, including new devices. **Allow rejoining** removes the block but does not automatically rejoin the account or reset its permissions. Other parties and Jellyfin account permissions are unaffected.
+- **Kick and revoke link** removes a guest by revoking its admission invitation. The confirmation shows how many guest sessions share that link: **all of those sessions** are disconnected and the old link can no longer admit anyone. Anonymous people cannot be reliably identified across cleared cookies, new browsers, or newly issued invitations; this is not an identity-based permanent ban. Use separate links when individual guest removal is important.
+
+Locking joins preserves existing viewers. Disabling guest access permanently revokes current guest-enabled links and their leases; turning it back on does not resurrect them. The owner retains control and cannot kick/demote themselves; they may leave or end the party. Destructive actions require UI confirmation. Permissions and participant targets are revalidated on every server request; non-owners cannot fetch the management roster or call moderation operations. Restricted signed-in viewers are excluded from group buffering waits, and their buffering/readiness/ignore-wait reports cannot pause or reposition the group. Their ordinary session-progress reports cannot become an alternate authority for guest media either: if no playback-authorized signed-in member is playing, guests wait instead of following a read-only viewer. A native removal/wait-policy cleanup failure ends the affected party rather than leaving a partially enforced group. These are party controls, not restrictions on a signed-in account's pre-existing access to Jellyfin outside the party.
 
 ## Guest security model
 
@@ -176,7 +202,7 @@ Ending a party or revoking access prevents further delivery and stops unused enc
 
 ### Internal API for other Jellyfin plugins
 
-Reference the versioned SDK and register `services.AddPrivateSyncPlayClient()` inside your `IPluginServiceRegistrator`. Then constructor-inject `IWatchPartyService` to create/query parties, generate invitation links on behalf of authenticated users, join, revoke, leave or end parties without HTTP calls. All operations retain user/session checks, native SyncPlay permissions, administrator guest restrictions, capacity limits and party lifetime rules.
+Reference the matching current SDK **1.1.0** and register `services.AddPrivateSyncPlayClient()` inside your `IPluginServiceRegistrator`. Constructor-inject the single `IWatchPartyService` into a C# service, event handler or automation workflow for parties, invitations, joins, owner rosters, permissions, kick/block/unblock and teardown. No HTTP or JavaScript is required, and no legacy interfaces or older-provider fallback paths are retained. All operations enforce user/session checks, native SyncPlay permissions, administrator ceilings, capacity limits and lifetime rules. Guest UI controls have a separate opt-in declarative registration API.
 
 See **[plugin API documentation and complete examples](docs/plugin-api.md)**, including typed method signatures, XML/IntelliSense documentation, optional dependency handling and Jellyfin's isolated assembly load contexts. [`examples/WatchPartyConsumer`](examples/WatchPartyConsumer) is a separately compiled example plugin used in Docker integration tests; it is not shipped in the production plugin ZIP.
 

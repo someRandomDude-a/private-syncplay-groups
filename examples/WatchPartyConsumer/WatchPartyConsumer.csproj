@@ -4,6 +4,12 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" ExcludeAssets="runtime" />
     <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('../../src/Jellyfin.Plugin.PrivateSyncPlay.Api/Jellyfin.Plugin.PrivateSyncPlay.Api.csproj')">
     <ProjectReference Include="../../src/Jellyfin.Plugin.PrivateSyncPlay.Api/Jellyfin.Plugin.PrivateSyncPlay.Api.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="!Exists('../../src/Jellyfin.Plugin.PrivateSyncPlay.Api/Jellyfin.Plugin.PrivateSyncPlay.Api.csproj')">
+    <!-- Portable developer ZIP: use its public SDK DLL, not the main plugin implementation. -->
+    <Reference Include="Jellyfin.Plugin.PrivateSyncPlay.Api"><HintPath>../../Jellyfin.Plugin.PrivateSyncPlay.Api.dll</HintPath><Private>true</Private></Reference>
   </ItemGroup>
 </Project>

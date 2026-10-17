@@ -22,7 +22,7 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
         services.AddKeyedSingleton<Func<Guid, string, string, string, CancellationToken, Task<string>>>(WatchPartyClient.ServiceKey,
             (sp, _) => (user, session, operation, json, token) => status.IsAvailable
                 ? sp.GetRequiredService<WatchPartyService>().InvokeAsync(user, session, operation, json, token)
-                : Task.FromResult("{\"statusCode\":503,\"error\":\"Private SyncPlay is unavailable.\"}"));
+                 : Task.FromResult("{\"statusCode\":503,\"error\":\"Private SyncPlay is unavailable.\"}"));
         if (!ServerCompatibility.Supports(applicationHost.ApplicationVersion))
         {
             status.Disable($"Private SyncPlay targets Jellyfin {ServerCompatibility.TargetAbi} only. The existing server engine was not replaced.");
@@ -48,6 +48,7 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<GuestEncoding>();
         services.AddSingleton<GuestSubtitles>();
         services.AddSingleton<NativeWebStyles>();
+        services.AddSingleton<GuestPlayerRegistry>();
         services.AddSingleton<WatchPartyService>();
         services.AddSingleton<IWatchPartyService>(sp => sp.GetRequiredService<WatchPartyService>());
         services.AddSingleton<IStartupFilter, WebInjection>();
@@ -65,6 +66,9 @@ public sealed class PartyErrors(PluginStatus status, ILogger<PartyErrors> logger
         {
             context.HttpContext.Response.Headers.CacheControl = "no-store, private";
             context.HttpContext.Response.Headers.XContentTypeOptions = "nosniff";
+            if (context.ActionDescriptor is ControllerActionDescriptor guest && guest.ControllerTypeInfo.AsType() == typeof(GuestController)
+                && !GuestPlayerPolicy.KnownOperation(guest.ActionName))
+                context.Result = new ObjectResult(new { Error = "Guest operation is not permitted." }) { StatusCode = 403 };
         }
         // Runs before controller activation, including when incompatible dependencies are deliberately not registered.
         if (IsPlugin(context.ActionDescriptor) && !status.IsAvailable)

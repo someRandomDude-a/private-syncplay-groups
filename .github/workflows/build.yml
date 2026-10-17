@@ -28,6 +28,8 @@ jobs:
         run: ./scripts/package.ps1
       - run: node scripts/validate-package.mjs
       - shell: pwsh
+        run: ./scripts/test-sdk.ps1
+      - shell: pwsh
         run: ./tests/catalog-publish.test.ps1
       - shell: pwsh
         run: ./tests/catalog-history.test.ps1

@@ -7,6 +7,22 @@
     const video = byId('video'), player = byId('videoOsdPage'), status = byId('status');
     const play = byId('play'), join = byId('join'), signIn = byId('signin');
     const volume = byId('volume'), select = byId('subtitles'), subtitleStatus = byId('subtitleStatus');
+    const preview = document.body.dataset.guestPreview === 'true' ? window.PrivateSyncPlayGuestPreview : null;
+    const renderer = window.PrivateSyncPlayGuestPlayer.mount(player, (feature, value) => {
+        if (feature === 'volume') { if (renderer.can('volume')) { video.volume = value; video.muted = false; } }
+        else if (feature === 'mute') byId('mute').click();
+        else if (feature === 'subtitles') captionsPanel();
+        else if (feature === 'fullscreen') void fullscreen();
+    }, detail => preview?.select(detail));
+    renderer.apply(null);
+    function applyPolicy(policy) {
+        renderer.apply(policy, !!preview && preview.editing);
+        if (preview) renderer.editable();
+        if (!renderer.can('subtitles')) { clearSubtitle(); byId('subtitlesButton').setAttribute('aria-expanded','false'); }
+        byId('fullscreen').hidden ||= typeof player.requestFullscreen !== 'function';
+        if (typeof player.requestFullscreen !== 'function') player.querySelectorAll('[data-guest-feature="fullscreen"]').forEach(node => node.hidden = true);
+        volumeChanged();
+    }
     const normalize = x => Array.isArray(x) ? x.map(normalize) : x && typeof x === 'object'
         ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k[0].toLowerCase() + k.slice(1), normalize(v)])) : x;
     let hls, generation, active = false, timer, hideTimer, epoch = 0, state, receivedAt = 0;
@@ -22,7 +38,7 @@
     function message(text) { status.textContent = text; byId('playerStatus').textContent = text; }
     function showControls() {
         player.classList.remove('privateSyncPlayControlsHidden'); clearTimeout(hideTimer);
-        if (active && desiredPlaying && play.hidden && byId('subtitleSettings').hidden) hideTimer = setTimeout(() => {
+        if (!preview && active && desiredPlaying && play.hidden && byId('subtitleSettings').hidden) hideTimer = setTimeout(() => {
             const focus = document.activeElement;
             if (focus === player || focus === video || !player.contains(focus)) player.classList.add('privateSyncPlayControlsHidden');
         }, 5000);
@@ -30,6 +46,7 @@
     player.addEventListener('pointermove', showControls); player.addEventListener('pointerdown', showControls);
     player.addEventListener('focusin', showControls);
     async function request(path, body) {
+        if (preview) throw new Error('Server requests are unavailable in the preview.');
         const r = await fetch(new URL('Guest/' + path, base), { credentials: 'same-origin', cache: 'no-store',
             method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json' },
             body: body === undefined ? undefined : JSON.stringify(body) });
@@ -40,7 +57,7 @@
         return r.status === 204 ? null : normalize(await r.json());
     }
     function clearSubtitle() {
-        if (subtitleElement) { subtitleElement.track.mode = 'disabled'; subtitleElement.remove(); subtitleElement = null; }
+        if (subtitleElement) { subtitleElement.track.mode = 'disabled'; if (preview) URL.revokeObjectURL(subtitleElement.src); subtitleElement.remove(); subtitleElement = null; }
         subtitleKey = null;
     }
     function clearStream() {
@@ -69,33 +86,39 @@
         byId('mute').setAttribute('aria-pressed', String(muted));
         byId('muteIcon').textContent = '';
         byId('muteIcon').className = 'xlargePaperIconButton material-icons ' + (muted ? 'volume_off' : 'volume_up');
+        renderer.volume(video.volume, muted);
     }
-    volume.oninput = () => { video.volume = Number(volume.value); video.muted = false; volumeChanged(); };
-    byId('mute').onclick = () => { video.muted = !(video.muted || video.volume === 0); if (!video.muted && video.volume === 0) video.volume = 0.5; volumeChanged(); };
+    volume.oninput = () => { if (!renderer.can('volume')) return; video.volume = Number(volume.value); video.muted = false; volumeChanged(); };
+    byId('mute').onclick = () => { if (!renderer.can('mute')) return; video.muted = !(video.muted || video.volume === 0); if (!video.muted && video.volume === 0) video.volume = 0.5; volumeChanged(); };
     video.addEventListener('volumechange', volumeChanged); volumeChanged();
     async function fullscreen() {
+        if (!renderer.can('fullscreen')) return;
         try {
             if (document.fullscreenElement === player) await document.exitFullscreen();
             else await player.requestFullscreen();
         } catch { message('Fullscreen is unavailable in this browser.'); }
     }
-    byId('fullscreen').hidden = typeof player.requestFullscreen !== 'function';
+    byId('fullscreen').hidden ||= typeof player.requestFullscreen !== 'function';
     byId('fullscreen').onclick = fullscreen;
     document.addEventListener('fullscreenchange', () => {
         const full = document.fullscreenElement === player;
         byId('fullscreen').setAttribute('aria-label', full ? 'Exit fullscreen' : 'Enter fullscreen');
         byId('fullscreenIcon').className = 'xlargePaperIconButton material-icons ' + (full ? 'fullscreen_exit' : 'fullscreen');
+        player.querySelectorAll('[data-guest-extension] .fullscreen, [data-guest-extension] .fullscreen_exit').forEach(icon => {
+            icon.className = 'xlargePaperIconButton material-icons ' + (full ? 'fullscreen_exit' : 'fullscreen');
+        });
         showControls();
     });
     function captionsPanel() {
+        if (!renderer.can('subtitles')) return;
         const panel = byId('subtitleSettings'); panel.hidden = !panel.hidden;
-        byId('subtitlesButton').setAttribute('aria-expanded', String(!panel.hidden));
-        if (!panel.hidden) select.focus();
+        player.querySelectorAll('.btnSubtitles').forEach(button => button.setAttribute('aria-expanded', String(!panel.hidden)));
+        if (!panel.hidden) select.focus({ preventScroll:!!preview });
         showControls();
     }
     byId('subtitlesButton').onclick = captionsPanel;
     function updateSubtitles() {
-        if (!state || !generation) return;
+        if (!renderer.can('subtitles') || !state || !generation) return;
         const tracks = state.subtitles || [], burned = state.burnedSubtitleIndex != null;
         const signature = JSON.stringify([tracks, burned]);
         if (signature !== trackSignature) {
@@ -121,7 +144,9 @@
         const track = document.createElement('track'); subtitleElement = track;
         track.kind = 'subtitles'; track.label = info.label;
         if (/^[a-z]{2,3}(?:-[a-z0-9]+)*$/i.test(info.language || '')) track.srclang = info.language;
-        track.src = new URL(`Guest/media/${generation}/subtitles/${index}.vtt`, base).href;
+        track.src = preview ? URL.createObjectURL(new Blob(['WEBVTT\n\n00:00:00.000 --> 00:10:00.000\nExample subtitle\n'], {type:'text/vtt'}))
+            : new URL(`Guest/media/${generation}/subtitles/${index}.vtt`, base).href;
+        if (preview) track.addEventListener('load', () => URL.revokeObjectURL(track.src), {once:true});
         track.addEventListener('load', () => {
             if (subtitleElement !== track || subtitleKey !== key) return;
             // Native subtitles preserve movie timestamps. HLS starts at this generation's seek offset.
@@ -141,7 +166,7 @@
     };
     function targetTime() { return Math.max(0, (state?.position || 0) - (state?.offset || 0) + (desiredPlaying ? Math.min(1.5, (performance.now() - receivedAt) / 1000) : 0)); }
     function followPosition() {
-        if (!generation || !state) return;
+        if (preview || !generation || !state) return;
         const target = targetTime();
         for (let i = 0; i < video.buffered.length; i++) if (target >= video.buffered.start(i) && target <= video.buffered.end(i) && Math.abs(video.currentTime - target) > 1.5) { video.currentTime = target; break; }
     }
@@ -157,7 +182,7 @@
         if (key === 'm') byId('mute').click();
         else if (key === 'f') void fullscreen();
         else if (key === 'c') captionsPanel();
-        else if (['arrowup', 'arrowdown', '+', '-'].includes(key)) { video.volume = Math.min(1, Math.max(0, video.volume + (['arrowup', '+'].includes(key) ? 0.05 : -0.05))); }
+        else if (['arrowup', 'arrowdown', '+', '-'].includes(key)) { if (renderer.can('volume')) video.volume = Math.min(1, Math.max(0, video.volume + (['arrowup', '+'].includes(key) ? 0.05 : -0.05))); }
         else if (![' ', 'k', 'j', 'l', 'arrowleft', 'arrowright', 'home', 'end', 'mediaplaypause', 'mediatracknext', 'mediatrackprevious'].includes(key)) return;
         e.preventDefault(); e.stopPropagation();
     });
@@ -165,9 +190,10 @@
         if (!active) return;
         const mine = epoch;
         try {
-            const next = await request('State');
+            const next = preview ? preview.state(video) : await request('State');
             if (!active || mine !== epoch) return;
             state = next; receivedAt = performance.now(); desiredPlaying = state.playing && !state.paused;
+            applyPolicy(state.player);
             message(!state.playing ? 'Waiting for the party to play a video…' : state.paused ? 'Party paused.' : state.title || 'Watching');
             byId('position').textContent = clock(state.position); byId('duration').textContent = clock(state.duration);
             const progress = state.duration ? Math.min(100, Math.max(0, state.position / state.duration * 100)) : 0;
@@ -187,6 +213,7 @@
                 } else if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; void enablePlayback(); }
                 else { end('This browser does not support HLS playback.'); return; }
             }
+            if (preview) { generation = 'preview'; updateSubtitles(); }
             if (state.ready && generation === state.generation) { updateSubtitles(); followPosition(); }
         } catch (error) {
             if (!active || mine !== epoch) return;
@@ -204,7 +231,11 @@
         try { await request('Redeem', { Token: token }); await start(); }
         catch (error) { message(error.message); join.disabled = false; }
     };
-    byId('leave').onclick = async () => { end('You left the party.'); try { await request('Leave', {}); } catch { message('Playback stopped. The guest seat will expire if the server could not be reached.'); } };
-    if (!token) void start();
+    byId('leave').onclick = async () => {
+        if (preview) { message('Preview: this action leaves the party in the real player.'); return; }
+        end('You left the party.'); try { await request('Leave', {}); } catch { message('Playback stopped. The guest seat will expire if the server could not be reached.'); }
+    };
+    if (preview) { preview.configure(applyPolicy); preview.start(video); void start(); void enablePlayback(); }
+    else if (!token) void start();
     window.addEventListener('pagehide', () => { epoch++; active = false; desiredPlaying = false; clearTimeout(timer); clearTimeout(hideTimer); clearStream(); });
 })();

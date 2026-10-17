@@ -1,0 +1,14 @@
+<!doctype html><html><head><title>Guest player designer</title></head><body>
+<div id="privateSyncPlayPlayerSettings" data-role="page" class="page type-interior pluginConfigurationPage privateSyncPlaySettings privateSyncPlayDesigner">
+<div data-role="content"><div class="content-primary">
+<h2 class="sectionTitle">Guest player designer</h2>
+<p><a is="emby-linkbutton" class="emby-button raised" href="#/configurationpage?name=privateSyncPlay">Permissions and server settings</a></p>
+<p class="fieldDescription">Only explicitly allowed features are available to guests. Playback, leaving, and the browser’s enable-playback prompt are mandatory. Pause, seek, skip, queue, casting, downloads, and account/library access cannot be granted here.</p>
+<p class="fieldDescription">This is the actual guest renderer with the installed Jellyfin styles, branding CSS, and enabled declarative plugin controls. The live sample is generated in a sandbox: it uses no account, guest seat, or library media. CSS themes apply; arbitrary authenticated player scripts do not run.</p>
+<form id="pspPlayerForm"><p role="status">Loading player designer…</p></form>
+</div></div>
+<script>
+(function () {
+    var script = document.createElement('script'); script.src = ApiClient.getUrl('PrivateSyncPlay/assets/player-designer.js'); document.head.appendChild(script);
+})();
+</script></div></body></html>

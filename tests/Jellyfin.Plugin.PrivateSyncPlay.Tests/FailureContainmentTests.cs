@@ -34,6 +34,7 @@ public sealed class FailureContainmentTests
         await worker.ExecuteTask!; // An uncaught BackgroundService exception would stop Jellyfin by default.
         var bridge = provider.GetRequiredKeyedService<Func<Guid, string, string, string, CancellationToken, Task<string>>>(WatchPartyClient.ServiceKey);
         Assert.Contains("503", await bridge(Guid.NewGuid(), "session", "GetCurrentParty", "{}", default));
+        Assert.Contains("503", await bridge(Guid.NewGuid(), "session", "GetManagement", "{}", default));
     }
     [Theory]
     [InlineData(10)]
@@ -130,6 +131,23 @@ public sealed class FailureContainmentTests
             (_, _) => (_, _, _, _, _) => Task.FromResult(reply));
         using var provider = services.BuildServiceProvider();
         var error = await Assert.ThrowsAsync<WatchPartyException>(() => provider.GetRequiredService<IWatchPartyService>().GetCurrentPartyAsync(Guid.NewGuid(), "host"));
+        Assert.Equal(503, error.StatusCode);
+    }
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("{\"statusCode\":\"200\"}")]
+    [InlineData("{\"statusCode\":200}")]
+    [InlineData("{\"statusCode\":200,\"value\":null}")]
+    [InlineData("{\"statusCode\":700,\"error\":\"bad provider\"}")]
+    [InlineData("not json")]
+    public async Task MalformedManagementRepliesAreContainedByTheCurrentClient(string reply)
+    {
+        var services = new ServiceCollection().AddPrivateSyncPlayClient();
+        services.AddKeyedSingleton<Func<Guid, string, string, string, CancellationToken, Task<string>>>(WatchPartyClient.ServiceKey,
+            (_, _) => (_, _, _, _, _) => Task.FromResult(reply));
+        using var provider = services.BuildServiceProvider();
+        var error = await Assert.ThrowsAsync<WatchPartyException>(() => provider.GetRequiredService<IWatchPartyService>().GetManagementAsync(Guid.NewGuid(), "host", Guid.NewGuid()));
         Assert.Equal(503, error.StatusCode);
     }
 

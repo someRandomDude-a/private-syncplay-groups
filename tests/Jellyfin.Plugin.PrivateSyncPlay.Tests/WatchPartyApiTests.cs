@@ -145,5 +145,107 @@ public sealed class WatchPartyApiTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _client.CreatePartyAsync(_owner.Id, "owner-session", new("Movie"), cancellation.Token));
         Assert.Empty(_store.Parties);
     }
+    [Fact] public async Task TheSingleCurrentApiIncludesPartyAndManagementOperations()
+    {
+        Assert.True(_client.IsAvailable); Assert.IsType<WatchPartyClient>(_client);
+        var party = await Create();
+        var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId);
+        Assert.Equal(party.PartyId, snapshot.PartyId); Assert.Single(snapshot.Accounts);
+        Assert.Contains(typeof(IWatchPartyService).GetMethods(), m => m.Name == "GetManagementAsync");
+        Assert.Contains(typeof(IWatchPartyService).GetMethods(), m => m.Name == "KickAccountAsync");
+        Assert.Equal(typeof(IWatchPartyService), Assert.Single(typeof(IWatchPartyService).Assembly.GetTypes(), t => t.IsInterface));
+    }
+    [Fact] public async Task ManagementRejectsNonOwnersCrossPartyTargetsAndActorSessionSpoofing()
+    {
+        var party = await Create(); await _client.JoinByCodeAsync(_friend.Id, "friend-session", party.JoinCode!);
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.GetManagementAsync(_friend.Id, "friend-session", party.PartyId))).StatusCode);
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.GetManagementAsync(_owner.Id, "friend-session", party.PartyId))).StatusCode);
+        Assert.Equal(404, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.GetManagementAsync(_owner.Id, "owner-session", Guid.NewGuid()))).StatusCode);
+        var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId);
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.UpdatePolicyAsync(_friend.Id, "friend-session", party.PartyId, snapshot.Policy with { AllowJoins = false }))).StatusCode);
+    }
+    [Fact] public async Task TypedPolicyAndAccountPermissionsReachTheSameNativeRequestGuards()
+    {
+        var party = await Create(); await _client.JoinByCodeAsync(_friend.Id, "friend-session", party.JoinCode!);
+        var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId);
+        var account = Assert.Single(snapshot.Accounts, a => !a.IsOwner); Assert.NotEqual(_friend.Id, account.ParticipantId);
+        await _client.SetAccountPermissionsAsync(_owner.Id, "owner-session", party.PartyId, account.ParticipantId, new(false, true));
+        Assert.Equal(403, Assert.Throws<PartyException>(() => _manager.HandleRequest(_sessions[1], new MediaBrowser.Controller.SyncPlay.PlaybackRequests.PauseGroupRequest(), default)).Status);
+        snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId);
+        Assert.False(snapshot.Accounts.Single(a => !a.IsOwner).EffectivePermissions.EditQueue);
+        await _client.UpdatePolicyAsync(_owner.Id, "owner-session", party.PartyId, snapshot.Policy with { AllowJoins = false });
+        _sessions.Add(new SessionInfo(Mock.Of<ISessionManager>(), NullLogger.Instance) { Id = "friend-new-device", UserId = _friend.Id });
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.JoinByCodeAsync(_friend.Id, "friend-new-device", party.JoinCode!))).StatusCode);
+        Assert.Equal(400, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.UpdatePolicyAsync(_owner.Id, "owner-session", party.PartyId, snapshot.Policy with { MaxViewers = 1001 }))).StatusCode);
+    }
+    [Fact] public async Task TypedGuestFeaturesDistinguishInheritanceEmptyAndForbiddenFeatures()
+    {
+        var created = await _client.CreatePartyWithInviteAsync(_owner.Id, "owner-session", new("Guests"), Invite(true));
+        var secret = _store.RedeemGuest(created.Invite.InviteUrl.Fragment[1..], null, _config);
+        var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", created.Party.PartyId);
+        var guest = Assert.Single(snapshot.Guests); Assert.Null(guest.Permissions.Features);
+        await _client.UpdatePolicyAsync(_owner.Id, "owner-session", created.Party.PartyId, snapshot.Policy with { GuestFeatures = [GuestPlayerFeatures.Volume, GuestPlayerFeatures.Subtitles] });
+        await _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new([]));
+        Assert.Empty(_store.GuestOptions(secret, _config).Features);
+        await _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new());
+        Assert.True(_store.GuestOptions(secret, _config).Allows(GuestPlayerFeatures.Subtitles));
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new(["pause"])))).StatusCode);
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new([GuestPlayerFeatures.Fullscreen])))).StatusCode);
+    }
+    [Fact] public async Task TypedAccountKickAndUnblockCoverAllDevicesAndRetainOverrides()
+    {
+        var party = await Create();
+        _sessions.Add(new SessionInfo(Mock.Of<ISessionManager>(), NullLogger.Instance) { Id = "friend-second", UserId = _friend.Id });
+        await _client.JoinByCodeAsync(_friend.Id, "friend-session", party.JoinCode!); await _client.JoinByCodeAsync(_friend.Id, "friend-second", party.JoinCode!);
+        var account = (await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId)).Accounts.Single(a => !a.IsOwner);
+        Assert.Equal(2, account.SessionCount);
+        await _client.SetAccountPermissionsAsync(_owner.Id, "owner-session", party.PartyId, account.ParticipantId, new(false, false));
+        await _client.KickAccountAsync(_owner.Id, "owner-session", party.PartyId, account.ParticipantId);
+        Assert.Null(await _client.GetCurrentPartyAsync(_friend.Id, "friend-session")); Assert.Null(await _client.GetCurrentPartyAsync(_friend.Id, "friend-second"));
+        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.JoinByCodeAsync(_friend.Id, "friend-session", party.JoinCode!))).StatusCode);
+        var blocked = Assert.Single((await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId)).BlockedAccounts);
+        Assert.Equal(account.ParticipantId, blocked.ParticipantId);
+        await _client.UnblockAccountAsync(_owner.Id, "owner-session", party.PartyId, blocked.ParticipantId);
+        Assert.Null(await _client.GetCurrentPartyAsync(_friend.Id, "friend-session"));
+        await _client.JoinByCodeAsync(_friend.Id, "friend-session", party.JoinCode!);
+        Assert.False((await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId)).Accounts.Single(a => !a.IsOwner).EffectivePermissions.ControlPlayback);
+    }
+    [Fact] public async Task GuestKickIsExplicitlyDifferentFromAccountKickAndRevokesTheSharedInvitation()
+    {
+        var created = await _client.CreatePartyWithInviteAsync(_owner.Id, "owner-session", new("Guests", MaxViewers:3), Invite(true));
+        var token = created.Invite.InviteUrl.Fragment[1..]; var first = _store.RedeemGuest(token, null, _config); var second = _store.RedeemGuest(token, null, _config);
+        var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", created.Party.PartyId);
+        var guest = snapshot.Guests[0]; Assert.Equal(2, guest.SharedInviteGuestCount);
+        Assert.Equal(404, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.KickAccountAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId))).StatusCode);
+        Assert.Equal(404, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.KickGuestAndRevokeInviteAsync(_owner.Id, "owner-session", created.Party.PartyId, snapshot.Accounts[0].ParticipantId))).StatusCode);
+        Assert.Same(_store.Require(created.Party.PartyId), _store.GuestParty(first, _config));
+        await _client.KickGuestAndRevokeInviteAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId);
+        Assert.Throws<PartyException>(() => _store.GuestParty(first, _config)); Assert.Throws<PartyException>(() => _store.GuestParty(second, _config));
+        Assert.Throws<PartyException>(() => _store.ValidateInvite(token, _config)); Assert.Single(_store.Parties);
+    }
+    [Fact] public async Task DirectAndClientSnapshotsNeverExposeMutableLiveStateOrCredentialFields()
+    {
+        var created = await _client.CreatePartyWithInviteAsync(_owner.Id, "owner-session", new("Guests"), Invite(true));
+        var secret = _store.RedeemGuest(created.Invite.InviteUrl.Fragment[1..], null, _config);
+        var party = _store.Require(created.Party.PartyId); party.Policy = new(GuestFeatures:[GuestPlayerFeatures.Volume, GuestPlayerFeatures.Subtitles]);
+        var lease = _store.GuestSession(secret, _config); lease.Features = [GuestPlayerFeatures.Volume];
+        var snapshot = await _service.GetManagementAsync(_owner.Id, "owner-session", party.Id);
+        ((string[])snapshot.Policy.GuestFeatures!)[0] = "pause"; ((string[])snapshot.Guests[0].Permissions.Features!)[0] = "seek";
+        Assert.Equal(GuestPlayerFeatures.Volume, party.Policy.GuestFeatures![0]); Assert.Equal(GuestPlayerFeatures.Volume, lease.Features[0]);
+        var json = System.Text.Json.JsonSerializer.Serialize(await _client.GetManagementAsync(_owner.Id, "owner-session", party.Id));
+        Assert.DoesNotContain(secret, json); Assert.DoesNotContain(created.Invite.InviteUrl.Fragment[1..], json); Assert.DoesNotContain("owner-session", json);
+    }
+    [Fact] public async Task ManagementCancellationAndMalformedProtocolDoNotMutatePartyPolicy()
+    {
+        var party = await Create(); var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", party.PartyId);
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _client.UpdatePolicyAsync(_owner.Id, "owner-session", party.PartyId, snapshot.Policy with { AllowJoins = false }, cts.Token));
+        Assert.True(_store.Require(party.PartyId).Policy.AllowJoins);
+        foreach (var payload in new[] { "[]", "null", "not JSON", "{}" })
+        {
+            var reply = await _service.InvokeAsync(_owner.Id, "owner-session", "UpdatePolicy", payload, default);
+            Assert.Contains("400", reply);
+        }
+    }
     public void Dispose() { _provider.Dispose(); _manager.Dispose(); }
 }

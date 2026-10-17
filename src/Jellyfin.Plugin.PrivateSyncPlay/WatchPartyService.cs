@@ -116,6 +116,36 @@ public sealed class WatchPartyService(PrivateSyncPlayManager manager, PartyStore
             manager.EndParty(partyId); return true;
         }, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<WatchPartyManagement> GetManagementAsync(Guid userId, string sessionId, Guid partyId, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); var party = manager.OwnedParty(actor.Session, partyId);
+            return PartyManagementSnapshot.Capture(party, store, sessions, users, manager.Config); }, cancellationToken);
+    /// <inheritdoc />
+    public Task UpdatePolicyAsync(Guid userId, string sessionId, Guid partyId, WatchPartyPolicy policy, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); ArgumentNullException.ThrowIfNull(policy);
+            manager.UpdatePolicy(actor.Session, partyId, new(policy.AllowJoins, policy.AllowGuests, policy.ParticipantsControlPlayback, policy.ParticipantsEditQueue, policy.GuestFeatures?.ToArray()), policy.MaxViewers); return true; }, cancellationToken);
+    /// <inheritdoc />
+    public Task SetAccountPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyAccountPermissions permissions, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); ArgumentNullException.ThrowIfNull(permissions);
+            manager.SetAccountPermissions(actor.Session, partyId, participantId, permissions.ControlPlayback, permissions.EditQueue); return true; }, cancellationToken);
+    /// <inheritdoc />
+    public Task SetGuestPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyGuestPermissions options, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); ArgumentNullException.ThrowIfNull(options);
+            manager.SetGuestPermissions(actor.Session, partyId, participantId, options.Features?.ToArray()); return true; }, cancellationToken);
+    /// <inheritdoc />
+    public Task KickAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); var party = manager.OwnedParty(actor.Session, partyId);
+            if (!party.Accounts.Values.Any(a => a.Id == participantId)) throw new PartyException(404, "Account participant not found.");
+            manager.Kick(actor.Session, partyId, participantId); return true; }, cancellationToken);
+    /// <inheritdoc />
+    public Task KickGuestAndRevokeInviteAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); var party = manager.OwnedParty(actor.Session, partyId);
+            if (!store.Guests(party.Id).Any(g => g.Id == participantId)) throw new PartyException(404, "Guest participant not found.");
+            manager.Kick(actor.Session, partyId, participantId); return true; }, cancellationToken);
+    /// <inheritdoc />
+    public Task UnblockAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
+        => Run(() => { var actor = Actor(userId, sessionId); manager.Unblock(actor.Session, partyId, participantId); return true; }, cancellationToken);
+
     /// <summary>Framework-only protocol entry point, avoiding SDK type identity across plugin load contexts.</summary>
     public async Task<string> InvokeAsync(Guid userId, string sessionId, string operation, string requestJson, CancellationToken token)
     {
@@ -138,7 +168,14 @@ public sealed class WatchPartyService(PrivateSyncPlayManager manager, PartyStore
                 case "JoinByInvite": await JoinByInviteAsync(userId, sessionId, r.GetProperty("token").GetString()!, token); result = null; break;
                 case "LeaveParty": await LeavePartyAsync(userId, sessionId, token); result = null; break;
                 case "EndParty": await EndPartyAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), token); result = null; break;
-                default: throw new WatchPartyException(400, "Unknown version 1 watch-party operation.");
+                case "GetManagement": result = await GetManagementAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), token); break;
+                case "UpdatePolicy": await UpdatePolicyAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), Read<WatchPartyPolicy>(r.GetProperty("policy")), token); result = null; break;
+                case "SetAccountPermissions": await SetAccountPermissionsAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), r.GetProperty("participantId").GetGuid(), Read<WatchPartyAccountPermissions>(r.GetProperty("permissions")), token); result = null; break;
+                case "SetGuestPermissions": await SetGuestPermissionsAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), r.GetProperty("participantId").GetGuid(), Read<WatchPartyGuestPermissions>(r.GetProperty("options")), token); result = null; break;
+                case "KickAccount": await KickAccountAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), r.GetProperty("participantId").GetGuid(), token); result = null; break;
+                case "KickGuestAndRevokeInvite": await KickGuestAndRevokeInviteAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), r.GetProperty("participantId").GetGuid(), token); result = null; break;
+                case "UnblockAccount": await UnblockAccountAsync(userId, sessionId, r.GetProperty("partyId").GetGuid(), r.GetProperty("participantId").GetGuid(), token); result = null; break;
+                default: throw new WatchPartyException(400, "Unknown watch-party operation.");
             }
             return JsonSerializer.Serialize(new { statusCode = 200, value = result }, Json);
         }
