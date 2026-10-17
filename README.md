@@ -4,6 +4,8 @@ Native .NET 10 plugin with private SyncPlay groups, limited invite links, admini
 
 **Preview software.** Builds against Jellyfin 12.0's plugin ABI. Tested against a disposable Jellyfin **12.2 Docker server**, including real guest HLS generation/delivery, private API guards, guest API isolation, admission limits and permission revocation. The web launcher, private creation and invite-link creation have also been exercised in a browser. Complete the deployment checklist below for your own configuration before Internet exposure. Guest sharing is **off by default**.
 
+**Supported target: Jellyfin 12.x / .NET 10.** The latest official stable release checked on 2026-10-17 is **12.2**. CI discovers the latest stable **12.x** release from Jellyfin's official release API and tests both it and the minimum **12.0**, including installation and upgrade. Weekly checks catch new 12.x releases; they do not silently switch to 13.x. Other server majors are explicitly disabled by the plugin. A future release is not claimed tested until CI passes; hardware/proxy-specific checks still apply.
+
 ## Features
 
 - Public groups remain browsable through `/SyncPlay/List`. Private groups never appear there, even for their members.
@@ -34,6 +36,14 @@ Do not add the SDK ZIP, a GitHub `/blob/…` page, the source metadata file, or 
 
 For manual installation, download **`PrivateSyncPlay-X.Y.Z.zip`** from [GitHub Releases](https://github.com/someRandomDude-a/private-syncplay-groups/releases), extract it into a `PrivateSyncPlay` folder inside Jellyfin's plugins directory, and restart. Keep **both** `Jellyfin.Plugin.PrivateSyncPlay.dll` and `Jellyfin.Plugin.PrivateSyncPlay.Api.dll` together. The separate `PrivateSyncPlay.Api-1.0.0.zip` asset is a developer SDK, not a Jellyfin catalog plugin.
 
+### Version history and updates
+
+- **Dashboard → Plugins → Catalog → Private SyncPlay** uses Jellyfin's normal **version selector**. It lists published compatible versions, newest first, with their changelogs/timestamps. An ABI newer than your server is filtered out. Before the first publication there are no installable versions; after the first publication there is only one until another is released. Test fixture versions are never published.
+- The installed version appears in Jellyfin's **Plugins / My Plugins** list. The plugin settings page also displays the **running plugin version and server version**, so a downloaded update cannot be mistaken for code already running.
+- With the repository enabled and Jellyfin's plugin automatic updates allowed, its **Update Plugins** scheduled task downloads newer compatible versions. You can also select a specific version and install it from the catalog. **Restart Jellyfin** to activate the new DLLs, then refresh Jellyfin Web. Updates are not hot-loaded into an existing browser page.
+- Server/per-user plugin configuration persists across upgrades. Parties, invitations and guest cookies are deliberately invalidated on restart; hosts must create new parties/links. No temporary guest is turned into an account during an upgrade.
+- Back up Jellyfin's data/configuration before upgrading. For manual updates, stop Jellyfin and replace the DLLs together in the existing manual-install directory; do not mix plugin and API DLLs from different packages or create duplicate unversioned copies. Prefer catalog installation for native version selection and update tracking.
+
 ## Build from source
 
 Requires the **.NET 10 SDK**, Node.js 22+, and npm. No other Jellyfin plugins are required.
@@ -59,6 +69,8 @@ The packaging contract is checked against Jellyfin 12.2's [installer](https://gi
 ### Publishing a release (maintainers)
 
 Commit the source changes, create a version tag such as `v0.1.0`, and push the tag. `.github/workflows/release.yml` verifies .NET/UI tests and installs the packaged ZIP through a real Jellyfin Docker server's repository API, then tests the plugin and a separate API consumer. It publishes the plugin ZIP, SDK ZIP and manifest to that GitHub release **before** updating `manifest.json` on the dedicated `catalog` branch. No GitHub Pages setup is needed. The workflow needs `contents: write` permission and permission to create/update that branch. Existing release assets and catalog versions are not overwritten. Alternatively, run the release workflow manually with an **existing** `vX.Y.Z` tag.
+
+The verification job builds the **tag's exact version**, tests that ZIP, and passes the verified files to the publication job. Publication merges historical catalog entries with `scripts/merge-catalog.ps1` **without rebuilding or changing the tested ZIP**. Numeric version ordering, unchanged historical checksums/URLs, duplicate rejection and increasing release versions are regression-tested. The SDK keeps its own API version, independently of plugin release versions.
 
 The workflow merges the previous published catalog; local packaging can do the same with `./scripts/package.ps1 -Version X.Y.Z -PreviousManifest path/to/previous-manifest.json`. Reusing a version already in that catalog is rejected. Local packaging alone never creates a GitHub release or updates the catalog branch. If release creation succeeds but catalog publication fails (for example, branch protection), fix the permission and publish the **existing release's manifest**, not a rebuilt ZIP, with `scripts/publish-catalog.ps1`; supply the current catalog commit as `-ParentCommit` when the branch exists. The old catalog remains usable until the new one is published.
 
@@ -169,6 +181,8 @@ node scripts/integration.mjs
 ```
 
 To test the actual repository/ZIP installation path (also run in CI): build `examples/WatchPartyConsumer`, run `scripts/package.ps1`, then `node scripts/integration.mjs --with-consumer --install-from-catalog`. This starts a temporary nginx repository on a dedicated Docker network, installs through Jellyfin's `Repositories`/`Packages` APIs, verifies the DLLs and generated `meta.json` in its versioned plugin folder, restarts Jellyfin, and runs the playback/security tests. The test repository changes only the package's URL to its Docker-local fixture; its ZIP bytes and MD5 remain those of the generated release package. No public release is required for this local test.
+
+For the native update/version-history test, run `./scripts/test-upgrade.ps1 -Directory <new-temporary-directory> -Image jellyfin/jellyfin:12.2` after building the example consumer. It builds fixture versions 0.0.1/0.0.2 only in that temporary directory, installs the older version, publishes the newer fixture, runs Jellyfin's Update Plugins task and verifies restart activation, retained configuration, compatible version listing and invalid guest credentials. It then runs the full playback/security suite against the updated plugin. Use `node scripts/jellyfin-versions.mjs` to discover the current supported CI image matrix. Fixture builds change local `bin` output; rerun normal packaging afterward to restore the preview build.
 
 It uses the official `jellyfin/jellyfin:12.2` image, creates only new test data under the temporary directory, exposes randomly assigned **loopback-only** ports, generates a synthetic video and short-lived self-signed certificate, and removes its own container afterward. It does not mount or modify existing server data. The self-signed certificate exception applies only to the script's test HTTP client. Test data/diagnostics remain in the printed temporary folder. CI runs both this test and the unit tests.
 

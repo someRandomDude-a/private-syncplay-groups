@@ -2,6 +2,7 @@
 <div id="privateSyncPlaySettings" data-role="page" class="page type-interior pluginConfigurationPage privateSyncPlaySettings">
 <div data-role="content"><div class="content-primary"><div class="readOnlyContent">
 <h2 class="sectionTitle">Private SyncPlay</h2>
+<p id="pspVersion" class="fieldDescription" role="status">Loading version…</p>
 <p class="fieldDescription">Limits apply server-side. Guests receive no Jellyfin account or general API access. HTTPS is required for guest viewing.</p>
 <form id="pspForm"><p class="fieldDescription" role="status">Loading settings…</p></form>
 </div></div></div>
@@ -26,6 +27,14 @@
     async function load() {
         UI = await loadUI();
         config = await ApiClient.getPluginConfiguration(id);
+        try {
+            var version = await ApiClient.ajax({ type:'GET', url:ApiClient.getUrl('PrivateSyncPlay/Version'), dataType:'json' });
+            page.querySelector('#pspVersion').textContent = 'Private SyncPlay ' + (version.PluginVersion || version.pluginVersion)
+                + ' · Jellyfin ' + (version.ServerVersion || version.serverVersion)
+                + '. Version history and updates: Dashboard → Plugins → Catalog → Private SyncPlay. Restart Jellyfin after installing an update.';
+        } catch {
+            page.querySelector('#pspVersion').textContent = 'Version information unavailable. Check Dashboard → Plugins for installed versions and updates.';
+        }
         var users = await ApiClient.getUsers(); form.replaceChildren(); rows = [];
         Object.keys(bools).forEach(function (key) { UI.field(bools[key], 'checkbox', config[key], form, key); });
         UI.select('Default creation mode', ['Public','Private'], enumValue(config.DefaultMode,['Public','Private']), form, 'DefaultMode');

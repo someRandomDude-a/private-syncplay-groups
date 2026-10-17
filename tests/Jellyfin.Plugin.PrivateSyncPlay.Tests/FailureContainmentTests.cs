@@ -24,7 +24,7 @@ public sealed class FailureContainmentTests
         var services = new ServiceCollection();
         var engine = Mock.Of<ISyncPlayManager>();
         services.AddSingleton(engine);
-        new ServiceRegistrator().RegisterServices(services, Mock.Of<IServerApplicationHost>());
+        new ServiceRegistrator().RegisterServices(services, Mock.Of<IServerApplicationHost>(h => h.ApplicationVersion == new Version(12, 2, 0, 0)));
         services.AddLogging();
         using var provider = services.BuildServiceProvider();
         Assert.Same(engine, provider.GetRequiredService<ISyncPlayManager>());
@@ -34,6 +34,20 @@ public sealed class FailureContainmentTests
         await worker.ExecuteTask!; // An uncaught BackgroundService exception would stop Jellyfin by default.
         var bridge = provider.GetRequiredKeyedService<Func<Guid, string, string, string, CancellationToken, Task<string>>>(WatchPartyClient.ServiceKey);
         Assert.Contains("503", await bridge(Guid.NewGuid(), "session", "GetCurrentParty", "{}", default));
+    }
+    [Theory]
+    [InlineData(10)]
+    [InlineData(13)]
+    public void UnsupportedServerMajorDisablesPluginWithoutReplacingEngine(int major)
+    {
+        var services = new ServiceCollection(); var engine = Mock.Of<ISyncPlayManager>();
+        services.AddSingleton(engine);
+        var host = Mock.Of<IServerApplicationHost>(h => h.ApplicationVersion == new Version(major, 0, 0, 0));
+        new ServiceRegistrator().RegisterServices(services, host);
+        using var provider = services.BuildServiceProvider();
+        Assert.False(provider.GetRequiredService<PluginStatus>().IsAvailable);
+        Assert.Contains("12.x only", provider.GetRequiredService<PluginStatus>().Failure);
+        Assert.Same(engine, provider.GetRequiredService<ISyncPlayManager>());
     }
 
     [Fact] public async Task BackgroundDependencyFailureRevokesLeasesAndNeverFaultsHostTask()

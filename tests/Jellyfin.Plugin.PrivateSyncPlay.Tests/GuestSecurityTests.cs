@@ -62,6 +62,7 @@ public sealed class GuestSecurityTests
     }
     [Fact] public void SignedInRoutesRequireJellyfinPolicies()
     {
+        Assert.Equal(Policies.RequiresElevation, typeof(VersionController).GetCustomAttribute<AuthorizeAttribute>()!.Policy);
         Assert.Equal(Policies.SyncPlayHasAccess, typeof(PartyController).GetCustomAttribute<AuthorizeAttribute>()!.Policy);
         Assert.Equal(Policies.SyncPlayCreateGroup, typeof(PartyController).GetMethod("Create")!.GetCustomAttribute<AuthorizeAttribute>()!.Policy);
         Assert.Equal(Policies.SyncPlayJoinGroup, typeof(PartyController).GetMethod("JoinCode")!.GetCustomAttribute<AuthorizeAttribute>()!.Policy);

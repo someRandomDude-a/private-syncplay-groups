@@ -11,11 +11,15 @@ import assert from 'node:assert/strict';
 const root = resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || join(tmpdir(), 'opencode', 'private-syncplay-integration-' + Date.now()));
 const withConsumer = process.argv.includes('--with-consumer');
 const catalogInstall = process.argv.includes('--install-from-catalog');
+const testUpgrade = process.argv.includes('--test-upgrade');
+const packagesDirectory = resolve(process.argv.find(x=>x.startsWith('--packages='))?.slice(11) || 'artifacts');
+if(testUpgrade && !catalogInstall) throw new Error('Upgrade testing requires catalog installation');
 const resume = process.argv.find(x => x.startsWith('--resume='))?.slice(9);
 if (catalogInstall && resume) throw new Error('Catalog installation test requires a fresh disposable server');
 if (resume && !resume.startsWith('private-syncplay-integration-')) throw new Error('Refusing to reuse an unrelated container');
 const name = resume || 'private-syncplay-integration-' + process.pid;
-const image = 'jellyfin/jellyfin:12.2';
+const image = process.argv.find(x=>x.startsWith('--image='))?.slice(8) || 'jellyfin/jellyfin:12.2';
+if (!/^jellyfin\/jellyfin:12\.\d+(?:\.\d+)?$/.test(image)) throw new Error('Integration testing supports official stable Jellyfin 12.x images only');
 const keep = process.argv.includes('--keep');
 function command(exe, args) {
     const result = spawnSync(exe, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -31,6 +35,7 @@ const sameId = (a,b) => typeof a === 'string' && a.replaceAll('-','').toLowerCas
 const pascal = x => Array.isArray(x) ? x.map(pascal) : x && typeof x === 'object'
     ? Object.fromEntries(Object.entries(x).map(([k,v]) => [k[0].toUpperCase()+k.slice(1), pascal(v)])) : x;
 let base, cookie;
+let upgradeCatalog;
 async function request(path, { method = 'GET', body, auth, guest = false, origin = false, expected = 200, extraHeaders = {} } = {}) {
     const url = new URL(path.replace(/^\//, ''), base + '/');
     const headers = { ...extraHeaders };
@@ -50,7 +55,7 @@ async function request(path, { method = 'GET', body, auth, guest = false, origin
         req.on('error', reject); req.setTimeout(30000, () => req.destroy(new Error('HTTP timeout')));
         if (body !== undefined) req.write(JSON.stringify(path.startsWith('Plugins/') || path.startsWith('System/Configuration/') || path.endsWith('/Policy') ? pascal(body) : body)); req.end();
     });
-    if (expected !== null && result.status !== expected)
+    if (expected !== null && !(Array.isArray(expected) ? expected.includes(result.status) : result.status === expected))
         throw new Error(`${method} ${path.split('?')[0]}: expected ${expected}, got ${result.status}: ${String(JSON.stringify(result.data)).slice(0, 1600)}`);
     return result;
 }
@@ -68,12 +73,19 @@ try {
         await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.dll'));
         await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay.Api/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.Api.dll'));
     } else {
-        const catalog=JSON.parse(await readFile('artifacts/manifest.json','utf8'));
-        const entry=catalog[0].versions[0], file=new URL(entry.sourceUrl).pathname.split('/').at(-1);
+        const catalog=JSON.parse(await readFile(join(packagesDirectory,'manifest.json'),'utf8'));
+        if(testUpgrade) assert.equal(catalog[0].versions.length,2,'Upgrade fixtures must contain two real package versions');
         await mkdir(join(root,'repository'),{recursive:true});
-        await copyFile(join('artifacts',file),join(root,'repository',file));
         // Only the URL changes for the isolated test; ZIP bytes and checksum are the release package's.
-        entry.sourceUrl=`http://repository/${file}`;
+        for(const entry of catalog[0].versions) {
+            const file=new URL(entry.sourceUrl).pathname.split('/').at(-1);
+            await copyFile(join(packagesDirectory,file),join(root,'repository',file));
+            entry.sourceUrl=`http://repository/${file}`;
+        }
+        if(testUpgrade) {
+            upgradeCatalog=structuredClone(catalog);
+            catalog[0].versions=[catalog[0].versions[1]]; // Publish the older version first.
+        }
         await writeFile(join(root,'repository','manifest.json'),JSON.stringify(catalog));
         docker('network','create',network); networkStarted=true;
         docker('run','-d','--name',repository,'--network',network,'--network-alias','repository',
@@ -149,6 +161,62 @@ try {
         const installed=(await request('Plugins',{auth:admin})).data.find(p=>sameId(p.id,id));
         assert(installed && installed.version===version,'Installed plugin must report the catalog version');
         console.log('PASS real Jellyfin repository discovery, checksum-verified ZIP install, versioned folder, metadata and restart');
+        assert.equal((await request('PrivateSyncPlay/Version',{auth:admin})).data.pluginVersion,version);
+        if(testUpgrade) {
+            const configPath=`Plugins/${id}/Configuration`;
+            const saved=(await request(configPath,{auth:admin})).data;
+            saved.maxViewers=7; saved.maxInviteUses=4; saved.enableGuestInvites=true;
+            saved.defaultGuestPermission=false;
+            saved.users=[{userId:admin.user.id,defaultMode:'Private',guestInvites:'Allow'}];
+            await request(configPath,{method:'POST',auth:admin,body:saved,expected:204});
+            const canonicalSettings=(await request(configPath,{auth:admin})).data;
+            await request('PrivateSyncPlay/Groups',{method:'POST',auth:admin,body:{Name:'Expires on upgrade restart',Mode:1,MaxViewers:3}});
+            const oldInvite=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:2}})).data;
+            base=`https://127.0.0.1:${tlsPort}`;
+            const guest=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:oldInvite.token},origin:true,expected:204});
+            cookie=guest.headers['set-cookie'][0].split(';')[0];
+            await request('PrivateSyncPlay/Guest/State',{guest:true});
+            const newer=upgradeCatalog[0].versions[0];
+            // Future-ABI entries must not appear in Jellyfin 12's native version selector.
+            upgradeCatalog[0].versions.unshift({...newer,version:'99.0.0.0',targetAbi:'99.0.0.0'});
+            await writeFile(join(root,'repository','manifest.json'),JSON.stringify(upgradeCatalog));
+            const listed=(await request('Packages/Private%20SyncPlay',{auth:admin})).data.versions;
+            assert.deepEqual(listed.map(v=>v.version),[newer.version,version]);
+            assert(listed.every(v=>v.changelog && v.timestamp),'Version selector must have release notes and timestamps');
+            const tasks=(await request('ScheduledTasks',{auth:admin})).data;
+            const updateTask=tasks.find(t=>t.key==='PluginUpdateTask' || t.name==='Update Plugins');
+            assert(updateTask,'Native plugin update task must be available');
+            await request(`ScheduledTasks/Running/${updateTask.id}`,{method:'POST',auth:admin,expected:204});
+            let downloaded=false;
+            for(let i=0;i<90;i++) {
+                const installed=(await request('Plugins',{auth:admin})).data;
+                if(installed.some(p=>sameId(p.id,id) && p.version===newer.version)) { downloaded=true; break; }
+                await wait(1000);
+            }
+            assert(downloaded,'Native automatic update task must download the newer catalog version');
+            assert.equal((await request('PrivateSyncPlay/Version',{auth:admin})).data.pluginVersion,version,'Running code must remain old until restart');
+            docker('restart',name);
+            base=`http://127.0.0.1:${docker('port',name,'8096/tcp').split(':').at(-1)}`;
+            tlsPort=docker('port',name,'8920/tcp').split(':').at(-1);
+            let upgraded=false;
+            for(let i=0;i<120;i++) {
+                try { if((await request('PrivateSyncPlay/Version',{auth:admin,expected:null})).data.pluginVersion===newer.version) { upgraded=true; break; } } catch { }
+                await wait(1000);
+            }
+            assert(upgraded,'Restart must load the updated plugin assembly');
+            const active=(await request('Plugins',{auth:admin})).data.filter(p=>sameId(p.id,id) && p.status==='Active');
+            assert.equal(active.length,1,'Only one plugin version may be active');
+            assert.equal(active[0].version,newer.version);
+            assert.deepEqual((await request(configPath,{auth:admin})).data,canonicalSettings,'Server/per-user settings must survive an upgrade');
+            assert.equal((await request('PrivateSyncPlay/Me',{auth:admin})).data.party ?? null,null);
+            base=`https://127.0.0.1:${tlsPort}`;
+            await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
+            await request('PrivateSyncPlay/JoinInvite',{method:'POST',auth:admin,body:{Token:oldInvite.token},expected:404});
+            await request('PrivateSyncPlay/Version',{guest:true,expected:401});
+            cookie=undefined;
+            base=`http://127.0.0.1:${docker('port',name,'8096/tcp').split(':').at(-1)}`;
+            console.log('PASS native version history/ABI filtering, automatic update task, restart activation, settings retention and expired guest credentials');
+        }
     }
     if (!(await request('Users',{auth:admin})).data.some(u=>u.name==='party-friend'))
         await request('Users/New', { method:'POST', auth:admin, body:{ Name:'party-friend', Password:password } });
@@ -194,7 +262,9 @@ try {
     await request('PrivateSyncPlay/Guest/State',{guest:true});
     await request('Users/Me',{guest:true,expected:401});
     await request('Items',{guest:true,expected:401});
-    await request('SyncPlay/List',{guest:true,expected:401});
+    // Jellyfin 12.0 rejects the empty actor in its policy handler with 400; later 12.x uses 401.
+    // Neither response may reveal a group or accept guest control.
+    await request('SyncPlay/List',{guest:true,expected:[400,401]});
     await request(`Items?api_key=${invite.token}`,{expected:401});
     await request('PrivateSyncPlay/Guest/State',{guest:true,extraHeaders:{Origin:'https://evil.example'},expected:403});
     await request('PrivateSyncPlay/Guest/State',{guest:true,extraHeaders:{'Sec-Fetch-Site':'same-site'},expected:403});
@@ -222,7 +292,7 @@ try {
     const segment=manifest.split('\n').find(x=>x.startsWith('segment'))?.trim(); assert(segment);
     const bytes=await request(`PrivateSyncPlay/Guest/media/${state.generation}/${segment}`,{guest:true}); assert(bytes.bytes.length>188);
     await request(`PrivateSyncPlay/Guest/media/${state.generation}/secret.ts`,{guest:true,expected:404});
-    await request('SyncPlay/Pause',{method:'POST',guest:true,expected:401});
+    await request('SyncPlay/Pause',{method:'POST',guest:true,expected:[400,401]});
     console.log('PASS real stream-copy HLS manifest/segment, no guest party controls');
     const ownerPolicy=(await request(`Users/${admin.user.id}`,{auth:admin})).data.policy;
     const originalVideoPermission=ownerPolicy.enableVideoPlaybackTranscoding;

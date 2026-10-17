@@ -1,6 +1,6 @@
 param([string]$Version = '0.1.0', [string]$Dotnet = 'dotnet',
     [string]$Repository = 'someRandomDude-a/private-syncplay-groups', [string]$PreviousManifest = '',
-    [string]$Changelog = 'Preview release. See GitHub release notes for changes.')
+    [string]$Changelog = 'Preview release. See GitHub release notes for changes.', [string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must have the form X.Y.Z' }
 if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Repository must have the form owner/name' }
@@ -14,12 +14,13 @@ if ($PreviousManifest) {
     foreach ($entry in $previous[0].versions) {
         if ($entry.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or $entry.checksum -notmatch '^[a-fA-F0-9]{32}$' -or $entry.sourceUrl -notmatch '^https://') { throw 'Invalid previous release metadata' }
         if ($entry.version -eq ($Version + '.0')) { throw 'This version is already in the published catalog; publish a new version instead of replacing its ZIP/checksum' }
+        if ([Version]$entry.version -gt [Version]($Version + '.0')) { throw 'New releases must increase the plugin version' }
         $history += $entry
     }
 }
 & $Dotnet build (Join-Path $root 'src/Jellyfin.Plugin.PrivateSyncPlay') -c Release "-p:Version=$Version.0"
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
-$output = Join-Path $root 'artifacts'
+$output = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $root 'artifacts' }
 $stage = Join-Path $output ('PrivateSyncPlay-' + $Version)
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item (Join-Path $root 'src/Jellyfin.Plugin.PrivateSyncPlay/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.dll') $stage

@@ -23,6 +23,12 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
             (sp, _) => (user, session, operation, json, token) => status.IsAvailable
                 ? sp.GetRequiredService<WatchPartyService>().InvokeAsync(user, session, operation, json, token)
                 : Task.FromResult("{\"statusCode\":503,\"error\":\"Private SyncPlay is unavailable.\"}"));
+        if (applicationHost.ApplicationVersion is not { Major: 12 })
+        {
+            status.Disable("Private SyncPlay supports Jellyfin 12.x only. The existing server engine was not replaced.");
+            services.AddHostedService<PartyMaintenance>();
+            return;
+        }
         var core = services.LastOrDefault(x => x.ServiceType == typeof(ISyncPlayManager));
         if (core?.ImplementationType?.FullName != "Emby.Server.Implementations.SyncPlay.SyncPlayManager"
             || core.Lifetime != ServiceLifetime.Singleton)

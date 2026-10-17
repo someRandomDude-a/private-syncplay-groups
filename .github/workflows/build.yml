@@ -2,6 +2,9 @@ name: Build and test
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
 permissions:
   contents: read
 jobs:
@@ -19,19 +22,40 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm run test:ui
+      - run: node --test tests/jellyfin-versions.test.mjs
       - run: dotnet test tests/Jellyfin.Plugin.PrivateSyncPlay.Tests -c Release
       - shell: pwsh
         run: ./scripts/package.ps1
       - run: node scripts/validate-package.mjs
       - shell: pwsh
         run: ./tests/catalog-publish.test.ps1
+      - shell: pwsh
+        run: ./tests/catalog-history.test.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: PrivateSyncPlay-preview
           path: |
             artifacts/*.zip
             artifacts/manifest.json
+  server-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.releases.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - id: releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/jellyfin-versions.mjs
   integration:
+    needs: server-versions
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.server-versions.outputs.matrix) }}
+    name: Install and upgrade (${{ matrix.server }})
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,4 +72,6 @@ jobs:
       - shell: pwsh
         run: ./scripts/package.ps1
       - run: node scripts/validate-package.mjs
-      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-integration" --with-consumer --install-from-catalog
+      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-integration" --with-consumer --install-from-catalog --image=${{ matrix.image }}
+      - shell: pwsh
+        run: ./scripts/test-upgrade.ps1 -Directory "${{ runner.temp }}/private-syncplay-upgrade" -Image '${{ matrix.image }}'
