@@ -26,6 +26,16 @@ public sealed class WatchPartyApiTests : IDisposable
     private readonly ServiceProvider _provider;
     private readonly IWatchPartyService _client;
     private bool _mediaAllowed = true;
+
+    [Fact] public async Task AccountSwitchOnAnExistingSessionDoesNotInheritTheDotNetApiParty()
+    {
+        var party = await Create();
+        _sessions.Single(s => s.Id == "owner-session").UserId = _friend.Id;
+        Assert.Null(await _client.GetCurrentPartyAsync(_friend.Id, "owner-session"));
+        Assert.Equal(404, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.GetManagementAsync(_friend.Id, "owner-session", party.PartyId))).StatusCode);
+        Assert.Equal(404, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.CreateInviteAsync(_friend.Id, "owner-session", party.PartyId,
+            new CreateInviteOptions(new Uri("https://party.example"))))).StatusCode);
+    }
     public WatchPartyApiTests()
     {
         var users = new Mock<IUserManager>();
@@ -178,19 +188,22 @@ public sealed class WatchPartyApiTests : IDisposable
         Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.JoinByCodeAsync(_friend.Id, "friend-new-device", party.JoinCode!))).StatusCode);
         Assert.Equal(400, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.UpdatePolicyAsync(_owner.Id, "owner-session", party.PartyId, snapshot.Policy with { MaxViewers = 1001 }))).StatusCode);
     }
-    [Fact] public async Task TypedGuestFeaturesDistinguishInheritanceEmptyAndForbiddenFeatures()
+    [Fact] public async Task TypedOwnerApiCannotOverrideAdministratorGuestOptions()
     {
         var created = await _client.CreatePartyWithInviteAsync(_owner.Id, "owner-session", new("Guests"), Invite(true));
         var secret = _store.RedeemGuest(created.Invite.InviteUrl.Fragment[1..], null, _config);
         var snapshot = await _client.GetManagementAsync(_owner.Id, "owner-session", created.Party.PartyId);
-        var guest = Assert.Single(snapshot.Guests); Assert.Null(guest.Permissions.Features);
-        await _client.UpdatePolicyAsync(_owner.Id, "owner-session", created.Party.PartyId, snapshot.Policy with { GuestFeatures = [GuestPlayerFeatures.Volume, GuestPlayerFeatures.Subtitles] });
-        await _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new([]));
-        Assert.Empty(_store.GuestOptions(secret, _config).Features);
-        await _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new());
-        Assert.True(_store.GuestOptions(secret, _config).Allows(GuestPlayerFeatures.Subtitles));
-        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new(["pause"])))).StatusCode);
-        Assert.Equal(403, (await Assert.ThrowsAsync<WatchPartyException>(() => _client.SetGuestPermissionsAsync(_owner.Id, "owner-session", created.Party.PartyId, guest.ParticipantId, new([GuestPlayerFeatures.Fullscreen])))).StatusCode);
+        Assert.Single(snapshot.Guests);
+        Assert.DoesNotContain(typeof(IWatchPartyService).GetMethods(), m => m.Name == "SetGuestPermissionsAsync");
+        Assert.Null(typeof(WatchPartyPolicy).GetProperty("GuestFeatures"));
+        var unknownOperation = await _service.InvokeAsync(_owner.Id, "owner-session", "SetGuestPermissions", "{}", default);
+        Assert.Contains("400", unknownOperation);
+        var payload = System.Text.Json.JsonSerializer.Serialize(new { partyId = created.Party.PartyId,
+            policy = new { allowJoins = false, allowGuests = true, participantsControlPlayback = true, participantsEditQueue = true, maxViewers = 4, guestFeatures = new[] { "volume" } } });
+        Assert.Contains("400", await _service.InvokeAsync(_owner.Id, "owner-session", "UpdatePolicy", payload, default));
+        Assert.True(_store.Require(created.Party.PartyId).Policy.AllowJoins);
+        _config.GuestPlayer.Features = [GuestPlayerFeatures.Volume];
+        Assert.Equal(new[] { GuestPlayerFeatures.Volume }, _store.GuestOptions(secret, _config).Features);
     }
     [Fact] public async Task TypedAccountKickAndUnblockCoverAllDevicesAndRetainOverrides()
     {
@@ -227,11 +240,11 @@ public sealed class WatchPartyApiTests : IDisposable
     {
         var created = await _client.CreatePartyWithInviteAsync(_owner.Id, "owner-session", new("Guests"), Invite(true));
         var secret = _store.RedeemGuest(created.Invite.InviteUrl.Fragment[1..], null, _config);
-        var party = _store.Require(created.Party.PartyId); party.Policy = new(GuestFeatures:[GuestPlayerFeatures.Volume, GuestPlayerFeatures.Subtitles]);
-        var lease = _store.GuestSession(secret, _config); lease.Features = [GuestPlayerFeatures.Volume];
+        var party = _store.Require(created.Party.PartyId);
+        _config.GuestPlayer.Features = [GuestPlayerFeatures.Volume, GuestPlayerFeatures.Subtitles];
         var snapshot = await _service.GetManagementAsync(_owner.Id, "owner-session", party.Id);
-        ((string[])snapshot.Policy.GuestFeatures!)[0] = "pause"; ((string[])snapshot.Guests[0].Permissions.Features!)[0] = "seek";
-        Assert.Equal(GuestPlayerFeatures.Volume, party.Policy.GuestFeatures![0]); Assert.Equal(GuestPlayerFeatures.Volume, lease.Features[0]);
+        ((string[])snapshot.GuestFeatures)[0] = "pause";
+        Assert.Equal(GuestPlayerFeatures.Volume, _config.GuestPlayer.Features[0]);
         var json = System.Text.Json.JsonSerializer.Serialize(await _client.GetManagementAsync(_owner.Id, "owner-session", party.Id));
         Assert.DoesNotContain(secret, json); Assert.DoesNotContain(created.Invite.InviteUrl.Fragment[1..], json); Assert.DoesNotContain("owner-session", json);
     }

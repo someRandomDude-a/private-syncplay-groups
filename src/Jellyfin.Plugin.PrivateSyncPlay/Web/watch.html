@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en" dir="ltr" data-theme="{{THEME}}" class="layout-desktop">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Join watch party</title>
+<link rel="stylesheet" href="assets/native.css"><!--JELLYFIN_THEME-->
+<link rel="stylesheet" href="assets/ui.css"><link rel="stylesheet" href="../Branding/Css">
+<script defer src="assets/watch-entry.js"></script></head>
+<body class="skinBody privateSyncPlayGuest privateSyncPlayInvitation">
+<main class="privateSyncPlayContent content-primary">
+<h1 class="sectionTitle">Watch party</h1>
+<p id="status" class="fieldDescription" role="status" aria-live="polite">Checking your sign-in and invitation…</p>
+<div class="privateSyncPlayActions">
+<a is="emby-linkbutton" id="signin" class="emby-button raised button-submit" href="../web/index.html"><span>Sign in to join</span></a>
+<button is="emby-button" id="join" type="button" class="emby-button raised" hidden disabled><span>Watch as guest</span></button>
+</div></main></body></html>

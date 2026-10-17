@@ -73,9 +73,6 @@ public sealed class InviteController(IWatchPartyService parties, ISessionManager
     [HttpPost("Accounts/{participant:guid}/Permissions")]
     public Task<IActionResult> AccountPermissions(Guid participant, WatchPartyAccountPermissions permissions) => Manage(async (user, session, party, token) =>
     { await parties.SetAccountPermissionsAsync(user, session, party, participant, permissions, token); return NoContent(); });
-    [HttpPost("Guests/{participant:guid}/Permissions")]
-    public Task<IActionResult> GuestPermissions(Guid participant, WatchPartyGuestPermissions options) => Manage(async (user, session, party, token) =>
-    { await parties.SetGuestPermissionsAsync(user, session, party, participant, options, token); return NoContent(); });
     [HttpDelete("Accounts/{participant:guid}")]
     public Task<IActionResult> KickAccount(Guid participant) => Manage(async (user, session, party, token) =>
     { await parties.KickAccountAsync(user, session, party, participant, token); return NoContent(); });

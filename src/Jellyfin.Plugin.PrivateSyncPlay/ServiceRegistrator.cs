@@ -45,6 +45,7 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
         services.AddSingleton<PrivateSyncPlayManager>();
         services.AddSingleton<ISyncPlayManager>(sp => sp.GetRequiredService<PrivateSyncPlayManager>());
         services.AddSingleton<GuestMedia>();
+        services.AddSingleton<GuestNativeStreams>();
         services.AddSingleton<GuestEncoding>();
         services.AddSingleton<GuestSubtitles>();
         services.AddSingleton<NativeWebStyles>();
@@ -133,15 +134,16 @@ public sealed class PartyMaintenance(IServiceProvider services, PluginStatus sta
                 if (!status.IsAvailable) return;
                 lock (store.Gate)
                 {
-                    var members = store.Parties.Values.SelectMany(x => x.Members).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    var active = sessions.Sessions.Where(x => members.Contains(x.Id) && x.UserId != Guid.Empty).Where(x =>
+                    var members = store.Parties.Values.SelectMany(x => x.Members).ToArray();
+                    var memberIds = members.Select(x => x.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var active = sessions.Sessions.Where(x => memberIds.Contains(x.Id) && x.UserId != Guid.Empty).Where(x =>
                     {
                         var user = users.GetUserById(x.UserId);
                         return user is not null && user.SyncPlayAccess != Jellyfin.Database.Implementations.Enums.SyncPlayUserAccessType.None
                             && !user.Permissions.Any(p => p.Kind == Jellyfin.Database.Implementations.Enums.PermissionKind.IsDisabled && p.Value);
-                    }).Select(x => x.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    foreach (var session in members.Where(x => !active.Contains(x)))
-                        store.RemoveSession(session);
+                    }).ToLookup(x => x.Id, StringComparer.OrdinalIgnoreCase);
+                    foreach (var member in members.Where(x => !active[x.Key].Any(s => s.UserId == x.Value)))
+                        store.RemoveSession(member.Key);
                     store.Sweep(expected.Config);
                     foreach (var party in store.Parties.Values.ToArray())
                     {

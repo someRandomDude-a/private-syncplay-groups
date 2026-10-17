@@ -7,7 +7,7 @@ This is an **in-process .NET API**, not a loopback HTTP API. It follows Jellyfin
 | Goal | Recommended surface |
 | --- | --- |
 | Create/query parties; create/revoke invitations; join/leave/end | Inject `IWatchPartyService` |
-| Owner roster, party policy, account/guest permissions, kick/block/unblock | The same `IWatchPartyService` |
+| Owner roster, admission policy, account permissions, kick/block/unblock | The same `IWatchPartyService` |
 | Contribute an approved local guest control | `AddPrivateSyncPlayGuestControl(...)` during registration |
 | Signed-in playback/queue and public group discovery | Jellyfin's native SyncPlay APIs; Private SyncPlay retains the engine and enforces party roles |
 | Internal .NET automation/event/scheduled-job workflow | A normal C# service or function using `IWatchPartyService` |
@@ -121,15 +121,14 @@ All calls take `(Guid userId, string sessionId, Guid partyId, ..., CancellationT
 
 | Method | Additional arguments | Behavior |
 | --- | --- | --- |
-| `GetManagementAsync` | none | `WatchPartyManagement` snapshot: policy, allowed/effective guest features, accounts, guest leases, blocked accounts |
+| `GetManagementAsync` | none | `WatchPartyManagement` snapshot: policy, read-only administrator guest features, accounts, guest leases, blocked accounts |
 | `UpdatePolicyAsync` | `WatchPartyPolicy` | Complete policy replacement within administrator limits; does not reset per-participant overrides |
 | `SetAccountPermissionsAsync` | participant ID, `WatchPartyAccountPermissions` | Apply to all devices of that account in this party; queue editing also requires playback permission |
-| `SetGuestPermissionsAsync` | participant ID, `WatchPartyGuestPermissions` | Narrow optional guest features; `new()` inherits party defaults; `new([])` disables all optional features |
 | `KickAccountAsync` | account participant ID | Remove all devices and block rejoining this party; guest IDs are rejected |
 | `KickGuestAndRevokeInviteAsync` | guest participant ID | Revoke its invitation and disconnect **all guest leases sharing it**; account IDs are rejected |
 | `UnblockAccountAsync` | blocked-account participant ID | Allow rejoining, without auto-joining or resetting permissions |
 
-Snapshots contain **opaque party participant IDs**, not Jellyfin user IDs, core session IDs, invite tokens or guest credentials. Use `snapshot.Accounts`, `snapshot.Guests` and `snapshot.BlockedAccounts` to find targets; do not guess IDs or treat a guest label as a verified identity. `Permissions` are stored overrides; `EffectivePermissions` / `EffectiveFeatures` include current ceilings. Account entries aggregate devices; guest entries represent current leases. `SharedInviteGuestCount` is a snapshot, not a reservation of the affected count.
+Snapshots contain **opaque party participant IDs**, not Jellyfin user IDs, core session IDs, invite tokens or guest credentials. Use `snapshot.Accounts`, `snapshot.Guests` and `snapshot.BlockedAccounts` to find targets; do not guess IDs or treat a guest label as a verified identity. Account `Permissions` are stored overrides; `EffectivePermissions` include current ceilings. Guest player features are administrator-only: the top-level `GuestFeatures` is informational, not an owner-settable policy. There are no party/per-guest feature overrides. Account entries aggregate devices; guest entries represent current leases. `SharedInviteGuestCount` is a snapshot, not a reservation of the affected count.
 
 ### Read-modify-write policy and permissions
 
@@ -152,16 +151,7 @@ public sealed class MyOwnerTools(IWatchPartyService parties)
             await parties.SetAccountPermissionsAsync(authenticatedOwner, existingSession, partyId,
                 account.ParticipantId, new(ControlPlayback: false, EditQueue: false), ct);
 
-        var guest = state.Guests.FirstOrDefault();
-        if (guest is not null)
-        {
-            // Only choose from the currently effective party allowlist. These are not SyncPlay privileges.
-            var allowed = state.EffectiveGuestFeatures
-                .Where(f => f is GuestPlayerFeatures.Volume or GuestPlayerFeatures.Subtitles).ToArray();
-            await parties.SetGuestPermissionsAsync(authenticatedOwner, existingSession, partyId,
-                guest.ParticipantId, new(allowed), ct);
-            // To reset inheritance later, pass new WatchPartyGuestPermissions(), not null options.
-        }
+        // Guest player options are administrator-managed, not party-owner permissions.
     }
 }
 ```
@@ -201,7 +191,7 @@ services.AddPrivateSyncPlayGuestControl(new GuestPlayerControl(
     "example.captions", "subtitles", "Example plugin captions", "closed_caption"));
 ```
 
-Use a stable, namespaced lowercase ID (letters/digits/dots/hyphens, max 64 characters), a plain-text label (max 80 characters), and one Material icon class name (max 48 characters). Supported actions are exactly `GuestPlayerFeatures.Volume`, `.Mute`, `.Subtitles`, and `.Fullscreen`. A control **does not grant a feature** or become enabled just because its plugin is installed: an administrator must add it in **Guest player designer**, and its associated feature must be explicitly allowed by administrator, party and guest policy. Duplicate IDs, invalid descriptors and unsupported actions are ignored. Missing plugins or unknown saved IDs render nothing. Register only during startup; contributions are not a runtime code-execution surface.
+Use a stable, namespaced lowercase ID (letters/digits/dots/hyphens, max 64 characters), a plain-text label (max 80 characters), and one Material icon class name (max 48 characters). Supported actions are exactly `GuestPlayerFeatures.Volume`, `.Mute`, `.Subtitles`, and `.Fullscreen`. A control **does not grant a feature** or become enabled just because its plugin is installed: an administrator must add it in **Guest player designer**, and its associated feature must be explicitly allowed by administrator configuration. Owners cannot override it per party or guest. Duplicate IDs, invalid descriptors and unsupported actions are ignored. Missing plugins or unknown saved IDs render nothing. Register only during startup; contributions are not a runtime code-execution surface.
 
 The registry uses keyed DI **strings** (`GuestPlayerUiExtensions.ServiceKey`, `Jellyfin.Plugin.PrivateSyncPlay.GuestUi.v1`) so each plugin may bundle its own SDK copy without losing type identity. Controls clone the guest adapter's actual native control DOM and bind a built-in local action. HTML, CSS/script URLs, callbacks, arbitrary server operations and authenticated web-player scripts are not supported by this interface. Use public server branding CSS for trusted theme changes; never include private tokens or media URLs in CSS. This preserves the no-account boundary and lets the same contributed controls render in both real guests and the sandboxed editor.
 
@@ -214,11 +204,11 @@ dotnet build examples/WatchPartyConsumer -c Release
 node scripts/integration.mjs --with-consumer
 ```
 
-The integration test installs the example in a separate plugin folder to exercise real Jellyfin assembly isolation and checks guest permissions, revocation and final-member teardown through the generated invitation.
+The integration test installs the example in a separate plugin folder to exercise real Jellyfin assembly isolation and checks account permissions, administrator-only guest options, revocation and final-member teardown through the generated invitation.
 
 ## Internal .NET scripting / automation
 
-`examples/WatchPartyConsumer/PartyAutomation.cs` is a compilable C# workflow with **no HTTP or JavaScript dependency**. It creates private parties/invitations, changes participant policy, and resets guest permissions using the same current interface. Register your own workflow normally:
+`examples/WatchPartyConsumer/PartyAutomation.cs` is a compilable C# workflow with **no HTTP or JavaScript dependency**. It creates private parties/invitations and changes account participant policy using the same current interface. Register your own workflow normally:
 
 ```csharp
 services.AddPrivateSyncPlayClient();

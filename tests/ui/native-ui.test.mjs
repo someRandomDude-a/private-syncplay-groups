@@ -62,7 +62,9 @@ test('dialogs and feedback use native classes and accessible naming', () => {
 test('shared plugin CSS has no fixed palette, font, floating launcher or global control rules', async () => {
     const css=await readFile(new URL('ui.css',directory),'utf8');
     assert.doesNotMatch(css,/#[\da-f]{3,8}\b|rgba?\(|font-family\s*:|background(?:-color)?\s*:/i);
-    assert.doesNotMatch(css,/position\s*:\s*fixed|z-index/);
+    assert.doesNotMatch(css,/z-index/);
+    for(const [,selector,body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+        if(/position\s*:\s*fixed/.test(body)) assert.equal(selector.trim(),'.privateSyncPlayGuest #videoOsdPage','Only the standalone guest player fills its viewport; no floating app launcher');
     const web=await readFile(new URL('web.js',directory),'utf8');
     assert.doesNotMatch(web,/\balert\(|Object\.assign\([^)]*style/);
     assert.match(web,/cloneNode\(false\)/);

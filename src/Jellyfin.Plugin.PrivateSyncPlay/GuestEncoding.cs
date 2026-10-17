@@ -32,17 +32,17 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
         return source;
     }
 
-    public GuestEncodingPlan Build(Video video, User owner, double offset, int bitrateKbps, EncodingOptions options, int? subtitleIndex = null)
+    public GuestEncodingPlan Build(Video video, User owner, double offset, int bitrateKbps, EncodingOptions options, int? subtitleIndex = null, int? audioIndex = null)
     {
         var source = Source(video, owner);
         var subtitle = source.MediaStreams.FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.Index == subtitleIndex);
         var burn = subtitle is not null && GuestSubtitlePolicy.Allowed(source, subtitle) && GuestSubtitlePolicy.NeedsBurnIn(subtitle) ? subtitle.Index : (int?)null;
-        return Build(source, owner, offset, bitrateKbps, options, Path.GetFullPath(video.Path), burn);
+        return Build(source, owner, offset, bitrateKbps, options, Path.GetFullPath(video.Path), burn, audioIndex);
     }
 
     // The validated source overload also lets tests exercise Jellyfin's real encoding helpers.
     public GuestEncodingPlan Build(MediaBrowser.Model.Dto.MediaSourceInfo source, User owner, double offset,
-        int bitrateKbps, EncodingOptions options, string expectedPath, int? burnInSubtitleIndex = null)
+        int bitrateKbps, EncodingOptions options, string expectedPath, int? burnInSubtitleIndex = null, int? audioIndex = null)
     {
         if (source.Protocol != MediaProtocol.File || source.VideoType != VideoType.VideoFile
             || source.Path != expectedPath || (!string.IsNullOrEmpty(source.EncoderPath) && source.EncoderPath != source.Path)
@@ -53,6 +53,7 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
             Container = "ts", VideoCodec = "h264", AudioCodec = "aac", VideoBitRate = bitrateKbps * 1000,
             AudioBitRate = 128000, MaxAudioChannels = 2, MaxVideoBitDepth = 8,
             Profile = "high", VideoRangeType = "SDR", SubtitleStreamIndex = burnInSubtitleIndex ?? -1,
+            AudioStreamIndex = audioIndex,
             SubtitleMethod = SubtitleDeliveryMethod.Encode,
             StartTimeTicks = (long)(offset * TimeSpan.TicksPerSecond), EnableAudioVbrEncoding = true
         };
@@ -105,7 +106,7 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
             + helper.GetAudioBitStreamArguments(state, "ts", source.Container)
             + " -f hls -hls_time 2 -hls_list_size 10 -hls_flags delete_segments+independent_segments+temp_file"
             + " -hls_segment_filename segment%09d.ts -y index.m3u8";
-        return new GuestEncodingPlan(args, videoEncoder, copyVideo, copyAudio, SettingsKey(options), burnInSubtitleIndex);
+        return new GuestEncodingPlan(args, videoEncoder, copyVideo, copyAudio, SettingsKey(options), burnInSubtitleIndex, audioIndex);
     }
 
     public static void EnsurePermissions(User owner, bool copyVideo, bool copyAudio)
@@ -118,7 +119,7 @@ public sealed class GuestEncoding(EncodingHelper helper, IConfigurationManager c
     }
 }
 
-public sealed record GuestEncodingPlan(string Arguments, string VideoEncoder, bool CopyVideo, bool CopyAudio, string SettingsKey, int? BurnedSubtitleIndex = null)
+public sealed record GuestEncodingPlan(string Arguments, string VideoEncoder, bool CopyVideo, bool CopyAudio, string SettingsKey, int? BurnedSubtitleIndex = null, int? SelectedAudioIndex = null)
 {
     public string PlaybackMethod => CopyVideo ? CopyAudio ? "Remux" : "DirectStream" : "Transcode";
 }

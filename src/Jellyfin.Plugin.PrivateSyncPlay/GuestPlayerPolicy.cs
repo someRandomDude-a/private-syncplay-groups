@@ -24,7 +24,7 @@ public static class GuestPlayerPolicy
 {
     public static readonly string[] Features = ["title", "position", "volume", "mute", "subtitles", "fullscreen"];
     public static bool ValidId(string? id) => id is not null && Regex.IsMatch(id, @"\A[a-z][a-z0-9.-]{0,63}\z");
-    public static bool KnownOperation(string action) => action is "Redeem" or "State" or "Stream" or "Subtitle" or "Leave";
+    public static bool KnownOperation(string action) => action is "Options" or "Redeem" or "State" or "Stream" or "Subtitle" or "Leave";
     public static void Require(GuestPlayerOptions? options, string feature)
     {
         if (options?.Allows(feature) != true) throw new PartyException(403, "This guest feature is not enabled.");

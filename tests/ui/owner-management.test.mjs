@@ -11,10 +11,10 @@ async function setup(owner=true){
     const dom=new JSDOM('<html><body><header class="skinHeader"><div class="headerRight"><button class="paper-icon-button-light btnSyncPlay"></button></div></header></body></html>',
         {url:'https://media.example/jellyfin/web/index.html#/home',runScripts:'outside-only'});
     const w=dom.window,d=w.document,calls=[];
-    const data={id:party,capacity:8,policy:{allowJoins:true,allowGuests:true,participantsControlPlayback:true,participantsEditQueue:true,guestFeatures:['volume','subtitles']},
-        allowedGuestFeatures:['volume','subtitles'],participants:[{id:host,name:'Host',kind:'account',sessions:1,isOwner:true},
+    const data={id:party,capacity:8,policy:{allowJoins:true,allowGuests:true,participantsControlPlayback:true,participantsEditQueue:true},
+        participants:[{id:host,name:'Host',kind:'account',sessions:1,isOwner:true},
             {id:friend,name:'Friend <img src=x>',kind:'account',sessions:2,isOwner:false,playbackAllowed:true,queueAllowed:true},
-            {id:guest,name:'Guest ab1234',kind:'guest',sessions:1,isOwner:false,guestFeatures:['volume','subtitles'],inheritsGuestFeatures:true,sharedInviteViewers:2}],blocked:[]};
+            {id:guest,name:'Guest ab1234',kind:'guest',sessions:1,isOwner:false,sharedInviteViewers:2}],blocked:[]};
     Object.defineProperty(d,'currentScript',{value:{src:'https://media.example/jellyfin/PrivateSyncPlay/assets/web.js'}});
     w.HTMLElement.prototype.getClientRects=()=>[{width:10,height:10}];w.setInterval=()=>1;
     w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
@@ -33,7 +33,7 @@ test('owner sees a native participant table, scoped permissions and moderation, 
         assert(p.d.querySelector('table.detailTable caption'));assert.equal(p.d.querySelectorAll('tbody tr').length,3);
         assert(!p.d.querySelector('tbody img'));assert(p.d.querySelector(`[data-participant="${friend}"]`).textContent.includes('2 device(s)'));
         assert(!p.d.querySelector(`[data-participant="${host}"] button`));assert(p.d.querySelector('[data-psp-action="end-party"]'));
-        assert.equal(p.d.querySelectorAll('input[id^="pspPartyFeature-"]').length,2);
+        assert.equal(p.d.querySelectorAll('input[id^="pspPartyFeature-"]').length,0);
         assert(!p.d.querySelector('input[id$="-pause"]'));assert.equal(p.mutations().length,0);
     }finally{p.close();}
 });
@@ -53,13 +53,13 @@ test('account permission changes are scoped to the opaque participant ID and can
         assert(!call.data.includes('UserId'));assert(!call.data.includes('Owner'));
     }finally{p.close();}
 });
-test('guest features only use the allowlist and support resetting to party inheritance',async()=>{
+test('owner cannot configure guest player features at either party or individual level',async()=>{
     const p=await setup();try{
-        let row=p.d.querySelector(`[data-participant="${guest}"]`);
-        p.checkbox('Text subtitles',row).click();row.querySelector('[data-psp-action="save-guest-permissions"]').click();await tick();await tick();
-        assert.deepEqual(JSON.parse(p.mutations()[0].data),{Kind:'guest',GuestFeatures:['volume']});
-        row=p.d.querySelector(`[data-participant="${guest}"]`);p.button('Use party defaults',row).click();await tick();await tick();
-        assert.deepEqual(JSON.parse(p.mutations()[1].data),{Kind:'guest',GuestFeatures:null});
+        const row=p.d.querySelector(`[data-participant="${guest}"]`);
+        assert.equal(row.querySelectorAll('input,select').length,0);assert(row.textContent.includes('administrator-managed'));
+        assert(!p.d.querySelector('[data-psp-action="save-guest-permissions"]'));
+        p.d.querySelector('[data-psp-action="save-party-permissions"]').click();await tick();await tick();
+        assert.deepEqual(Object.keys(JSON.parse(p.mutations()[0].data)).sort(),['AllowGuests','AllowJoins','MaxViewers','ParticipantsControlPlayback','ParticipantsEditQueue']);
     }finally{p.close();}
 });
 test('guest removal requires confirmation and warns that everyone on the shared link is affected',async()=>{

@@ -16,6 +16,8 @@ public sealed class PartyStore(TimeProvider clock)
     private readonly Dictionary<string, Invite> _invites = [];
     private readonly Dictionary<string, Guest> _guests = [];
     private readonly Dictionary<string, (DateTimeOffset Start, int Count)> _attempts = [];
+    // Raised after revocation, under Gate. GuestMedia owns the one stream for this party.
+    internal event Action<Guid>? GuestAccessEnded;
     public DateTimeOffset Now => clock.GetUtcNow();
     public static string Secret() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private static string Digest(string secret) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secret)));
@@ -27,7 +29,7 @@ public sealed class PartyStore(TimeProvider clock)
         do { code = new string(Enumerable.Range(0, 8).Select(_ => alphabet[RandomNumberGenerator.GetInt32(alphabet.Length)]).ToArray()); }
         while (Parties.Values.Any(p => p.Code == code));
         var party = new Party(id, owner, session, mode, code, capacity);
-        party.Members.Add(session);
+        party.Members.Add(session, owner);
         Parties.Add(id, party);
         return party;
     }
@@ -36,7 +38,7 @@ public sealed class PartyStore(TimeProvider clock)
         && p.Code == code.Trim().ToUpperInvariant()) ?? throw new PartyException(404, "Invalid or expired invitation.")
         : throw new PartyException(404, "Invalid or expired invitation.");
     public Party Require(Guid id) => Parties.GetValueOrDefault(id) ?? throw new PartyException(404, "Party not found.");
-    public Party? ForSession(string session) => Parties.Values.FirstOrDefault(p => p.Members.Contains(session));
+    public Party? ForSession(string session, Guid user) => Parties.Values.FirstOrDefault(p => p.IsMember(session, user));
 
     public void RateLimit(string key, int limit = 20)
     {
@@ -52,7 +54,7 @@ public sealed class PartyStore(TimeProvider clock)
     {
         Sweep(config);
         if (!Parties.TryGetValue(party.Id, out var current) || !ReferenceEquals(party, current)) throw new PartyException(404, "Party not found.");
-        if (existingSession is not null && party.Members.Contains(existingSession)) return;
+        if (existingSession is not null && party.Members.ContainsKey(existingSession)) return;
         var count = party.Members.Count + _guests.Values.Count(g => g.PartyId == party.Id);
         if (count >= Math.Min(party.Capacity, config.MaxViewers)) throw new PartyException(409, "This party is full.");
     }
@@ -77,7 +79,7 @@ public sealed class PartyStore(TimeProvider clock)
         Sweep(config);
         if (token is null || token.Length != 64 || !_invites.TryGetValue(Digest(token), out var invite)
             || invite.ExpiresAt <= Now || !Parties.TryGetValue(invite.PartyId, out var party)
-            || (invite.Uses >= Math.Min(invite.MaxUses, config.MaxInviteUses) && (existingSession is null || !party.Members.Contains(existingSession))))
+            || (invite.Uses >= Math.Min(invite.MaxUses, config.MaxInviteUses) && (existingSession is null || !party.Members.ContainsKey(existingSession))))
             throw new PartyException(404, "Invalid or expired invitation.");
         return invite;
     }
@@ -86,9 +88,9 @@ public sealed class PartyStore(TimeProvider clock)
     {
         Sweep(config);
         if (token is null || token.Length != 64) throw new PartyException(404, "Invalid or expired invitation.");
-        if (existing is not null && _guests.TryGetValue(Digest(existing), out var prior)
-            && _invites.TryGetValue(Digest(token), out var same) && prior.InviteId == same.Id)
-        { prior.LastSeen = Now; return existing; }
+        var prior = ExistingGuest(token, existing);
+        if (prior is not null)
+        { prior.LastSeen = Now; return existing!; }
         var invite = ValidateInvite(token, config);
         var party = Require(invite.PartyId);
         if (!party.Policy.AllowJoins) throw new PartyException(403, "This party is not accepting new viewers.");
@@ -96,11 +98,27 @@ public sealed class PartyStore(TimeProvider clock)
         CheckSeat(party, null, config);
         var secret = Secret();
         // A browser gets one party-scoped lease; switching must not strand its old seat.
-        if (existing is not null) _guests.Remove(Digest(existing));
+        Guest? replaced = null;
+        if (existing is not null) _guests.Remove(Digest(existing), out replaced);
         _guests.Add(Digest(secret), new Guest(party.Id, invite.Id, Now));
         invite.Uses++;
+        if (replaced is not null) StopIfNoGuests(replaced.PartyId);
         return secret;
     }
+
+    // Invitation landing preflight only: no use/seat is consumed and no lease heartbeat is sent.
+    public bool GuestAdmissionAllowed(string token, string? existing, Configuration config)
+    {
+        Sweep(config);
+        var prior = token?.Length == 64 ? ExistingGuest(token, existing) : null;
+        var invite = prior is null ? ValidateInvite(token!, config) : _invites[Digest(token!)];
+        var party = Require(invite.PartyId);
+        return invite.AllowGuests && party.Policy.AllowGuests && config.CanInviteGuests(party.Owner)
+            && (prior is not null || (party.Policy.AllowJoins && party.Members.Count + GuestCount(party.Id) < Math.Min(party.Capacity, config.MaxViewers)));
+    }
+    private Guest? ExistingGuest(string token, string? credential)
+        => credential?.Length == 64 && _guests.TryGetValue(Digest(credential), out var guest)
+            && _invites.TryGetValue(Digest(token), out var invite) && guest.InviteId == invite.Id ? guest : null;
 
     public Party GuestParty(string secret, Configuration config, bool heartbeat = false)
         => Require(GuestSession(secret, config, heartbeat).PartyId);
@@ -113,10 +131,9 @@ public sealed class PartyStore(TimeProvider clock)
     }
     public GuestPlayerOptions GuestOptions(string secret, Configuration config)
     {
-        var guest = GuestSession(secret, config); var party = Require(guest.PartyId);
-        return new() { Features = GuestPlayerPolicy.Features.Where(f => config.GuestPlayer.Allows(f)
-            && (party.Policy.GuestFeatures is null || party.Policy.GuestFeatures.Contains(f, StringComparer.Ordinal))
-            && (guest.Features is null || guest.Features.Contains(f, StringComparer.Ordinal))).ToArray(), Controls = config.GuestPlayer.Controls };
+        GuestSession(secret, config);
+        // Guest player options belong exclusively to administrator configuration, never party owners.
+        return new() { Features = GuestPlayerPolicy.Features.Where(config.GuestPlayer.Allows).ToArray(), Controls = config.GuestPlayer.Controls.ToArray() };
     }
     public Guest[] Guests(Guid party) => _guests.Values.Where(g => g.PartyId == party).ToArray();
     public void RevokeGuestInvitations(Party party)
@@ -128,9 +145,17 @@ public sealed class PartyStore(TimeProvider clock)
     {
         foreach (var key in _invites.Where(x => x.Value.PartyId == party.Id && x.Value.Id == inviteId).Select(x => x.Key).ToArray()) _invites.Remove(key);
         foreach (var key in _guests.Where(x => x.Value.InviteId == inviteId && x.Value.PartyId == party.Id).Select(x => x.Key).ToArray()) _guests.Remove(key);
+        StopIfNoGuests(party.Id);
     }
 
-    public void LeaveGuest(string secret) => _guests.Remove(Digest(secret));
+    public void LeaveGuest(string secret)
+    {
+        if (_guests.Remove(Digest(secret), out var guest)) StopIfNoGuests(guest.PartyId);
+    }
+    private void StopIfNoGuests(Guid party)
+    {
+        if (GuestCount(party) == 0) GuestAccessEnded?.Invoke(party);
+    }
     public int GuestCount(Guid party) => _guests.Values.Count(g => g.PartyId == party);
     public IEnumerable<Invite> Invites(Guid party) => _invites.Values.Where(i => i.PartyId == party).ToArray();
     public void RemoveSession(string session)
@@ -146,12 +171,19 @@ public sealed class PartyStore(TimeProvider clock)
         Parties.Remove(id);
         foreach (var key in _guests.Where(x => x.Value.PartyId == id).Select(x => x.Key).ToArray()) _guests.Remove(key);
         foreach (var key in _invites.Where(x => x.Value.PartyId == id).Select(x => x.Key).ToArray()) _invites.Remove(key);
+        StopIfNoGuests(id);
     }
     public void Sweep(Configuration config)
     {
-        foreach (var key in _guests.Where(x => !Parties.TryGetValue(x.Value.PartyId, out var party)
+        // Administrative revocation is permanent for existing guest links, not merely a UI toggle.
+        // Account-only invitations are independent and remain usable.
+        foreach (var party in Parties.Values.Where(p => !p.Policy.AllowGuests || !config.CanInviteGuests(p.Owner)).ToArray())
+            RevokeGuestInvitations(party);
+        var expired = _guests.Where(x => !Parties.TryGetValue(x.Value.PartyId, out var party)
             || party.Members.Count == 0 || !party.Policy.AllowGuests || !config.CanInviteGuests(party.Owner)
-            || Now - x.Value.LastSeen > TimeSpan.FromSeconds(config.GuestLeaseSeconds)).Select(x => x.Key).ToArray()) _guests.Remove(key);
+            || Now - x.Value.LastSeen > TimeSpan.FromSeconds(config.GuestLeaseSeconds)).ToArray();
+        foreach (var pair in expired) _guests.Remove(pair.Key);
+        foreach (var id in expired.Select(x => x.Value.PartyId).Distinct()) StopIfNoGuests(id);
         foreach (var pair in _invites.Where(x => x.Value.ExpiresAt <= Now).ToArray())
         { if (Parties.TryGetValue(pair.Value.PartyId, out var party)) Revoke(party, pair.Value.Id); }
     }
@@ -165,7 +197,9 @@ public sealed class Party(Guid id, Guid owner, string hostSession, GroupMode mod
     public GroupMode Mode { get; } = mode;
     public string Code { get; } = code;
     public int Capacity { get; set; } = capacity;
-    public HashSet<string> Members { get; } = new(StringComparer.OrdinalIgnoreCase);
+    // Session IDs can survive an account switch. Never let a new user inherit the old admission.
+    public Dictionary<string, Guid> Members { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public bool IsMember(string session, Guid user) => user != Guid.Empty && Members.TryGetValue(session, out var admitted) && admitted == user;
     public Dictionary<Guid, PartyAccount> Accounts { get; } = new() { [owner] = new(owner) };
     public HashSet<Guid> BlockedUsers { get; } = [];
     public HashSet<string> ReadOnlySessions { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -175,7 +209,7 @@ public sealed class Party(Guid id, Guid owner, string hostSession, GroupMode mod
     public bool CanEditQueue(Guid user) => user == Owner || (CanControl(user) && Policy.ParticipantsEditQueue && Account(user).EditQueue);
 }
 public sealed record PartyPolicy(bool AllowJoins = true, bool AllowGuests = true, bool ParticipantsControlPlayback = true,
-    bool ParticipantsEditQueue = true, string[]? GuestFeatures = null);
+    bool ParticipantsEditQueue = true);
 public sealed class PartyAccount(Guid userId)
 {
     public Guid Id { get; } = Guid.NewGuid();
@@ -198,5 +232,4 @@ public sealed class Guest(Guid partyId, Guid inviteId, DateTimeOffset lastSeen)
     public Guid PartyId { get; } = partyId;
     public Guid InviteId { get; } = inviteId;
     public DateTimeOffset LastSeen { get; set; } = lastSeen;
-    public string[]? Features { get; set; }
 }

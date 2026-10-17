@@ -14,14 +14,13 @@ This **example/test plugin is not included in the production plugin ZIP**. It re
 
 ## What the example demonstrates
 
-**Start with `PartyAutomation.cs` for internal .NET scripting.** It is a normal injectable C# service that creates a private party, changes policy and restores guest defaults. It makes no HTTP requests and requires neither a browser nor JavaScript. Register your workflow with DI and call its methods from an authorized event handler, hosted service or scheduler. The `InviteController` routes below are only a test harness to invoke .NET operations inside this example plugin; they are not the recommended integration interface.
+**Start with `PartyAutomation.cs` for internal .NET scripting.** It is a normal injectable C# service that creates a private party and changes account participant policy. It makes no HTTP requests and requires neither a browser nor JavaScript. Guest player options are administrator-only; there are no owner feature overrides. Register your workflow with DI and call its methods from an authorized event handler, hosted service or scheduler. The `InviteController` routes below are only a test harness to invoke .NET operations inside this example plugin; they are not the recommended integration interface.
 
 - `POST WatchPartyExample/Invite`: create/reuse the actor's party and generate a link.
 - `DELETE WatchPartyExample/Invites/{id}`: revoke a link and its guest leases.
 - `GET WatchPartyExample/Management`: a typed owner-only roster/policy snapshot.
 - `POST WatchPartyExample/Policy`: complete policy replacement (use a snapshot's `Policy with { ... }` in .NET).
 - `POST WatchPartyExample/Accounts/{participant}/Permissions`: all devices of that account in this party.
-- `POST WatchPartyExample/Guests/{participant}/Permissions`: narrowed optional features; `{ "features": null }` resets inheritance, `[]` disables all optional features.
 - `DELETE WatchPartyExample/Accounts/{participant}`: kick/block the account from this party.
 - `DELETE WatchPartyExample/Guests/{participant}/Admission`: revoke its invitation and **all guest leases sharing it**. Confirm this effect in your UI.
 - `POST WatchPartyExample/Blocked/{participant}/Unblock`: permit rejoining; does not auto-join or reset permissions.

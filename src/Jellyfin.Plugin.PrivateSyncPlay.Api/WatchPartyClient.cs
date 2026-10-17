@@ -97,9 +97,6 @@ public sealed class WatchPartyClient(IServiceProvider services) : IWatchPartySer
     public Task SetAccountPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyAccountPermissions permissions, CancellationToken cancellationToken = default)
         => Command(userId, sessionId, "SetAccountPermissions", new { partyId, participantId, permissions }, cancellationToken);
     /// <inheritdoc />
-    public Task SetGuestPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyGuestPermissions options, CancellationToken cancellationToken = default)
-        => Command(userId, sessionId, "SetGuestPermissions", new { partyId, participantId, options }, cancellationToken);
-    /// <inheritdoc />
     public Task KickAccountAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, CancellationToken cancellationToken = default)
         => Command(userId, sessionId, "KickAccount", new { partyId, participantId }, cancellationToken);
     /// <inheritdoc />

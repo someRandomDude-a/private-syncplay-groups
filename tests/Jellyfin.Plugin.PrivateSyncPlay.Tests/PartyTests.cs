@@ -42,7 +42,7 @@ public sealed class PartyTests
     }
     [Fact] public void OtherSignedInMemberCanKeepPartyAlive()
     {
-        var party = Party(); party.Members.Add("friend");
+        var party = Party(); party.Members.Add("friend", Guid.NewGuid());
         var guest = _store.RedeemGuest(Invite(party), null, _config);
         _store.RemoveSession("host");
         Assert.Same(party, _store.GuestParty(guest, _config));
@@ -88,6 +88,33 @@ public sealed class PartyTests
         _store.RedeemGuest(invite, null, _config);
         Assert.Equal(2, _store.Invites(party.Id).Single().Uses);
     }
+    [Fact] public void InvitationOptionsConsumeNoSeatsOrUsesAndDoNotExtendAnExistingLease()
+    {
+        var party = Party(2); var invite = Invite(party, 1);
+        for (var i = 0; i < 5; i++) Assert.True(_store.GuestAdmissionAllowed(invite, null, _config));
+        Assert.Empty(_store.Guests(party.Id)); Assert.Equal(0, _store.Invites(party.Id).Single().Uses);
+        var guest = _store.RedeemGuest(invite, null, _config);
+        _clock.Advance(20);
+        Assert.True(_store.GuestAdmissionAllowed(invite, guest, _config));
+        Assert.Equal(1, _store.Invites(party.Id).Single().Uses);
+        _clock.Advance(11);
+        Assert.Throws<PartyException>(() => _store.GuestParty(guest, _config));
+    }
+    [Fact] public void InvitationOptionsRespectAccountOnlyLockedFullAndRevokedAdmissions()
+    {
+        var party = Party(2); var invite = Invite(party);
+        var account = _store.Issue(party, _owner, false, 1, null, _config).Token;
+        Assert.False(_store.GuestAdmissionAllowed(account, null, _config));
+        party.Policy = party.Policy with { AllowJoins = false };
+        Assert.False(_store.GuestAdmissionAllowed(invite, null, _config));
+        party.Policy = party.Policy with { AllowJoins = true };
+        var guest = _store.RedeemGuest(invite, null, _config);
+        Assert.False(_store.GuestAdmissionAllowed(invite, null, _config));
+        Assert.True(_store.GuestAdmissionAllowed(invite, guest, _config));
+        _config.EnableGuestInvites = false;
+        Assert.Throws<PartyException>(() => _store.GuestAdmissionAllowed(invite, guest, _config));
+        Assert.False(_store.GuestAdmissionAllowed(account, null, _config));
+    }
     [Fact] public void MediaRequestsDoNotExtendLease()
     {
         var party = Party(); var guest = _store.RedeemGuest(Invite(party), null, _config);
@@ -115,6 +142,60 @@ public sealed class PartyTests
         var party = Party(); var guest = _store.RedeemGuest(Invite(party), null, _config);
         _config.Users.Add(new UserSettings { UserId = _owner, GuestInvites = PermissionOverride.Deny });
         Assert.Throws<PartyException>(() => _store.GuestParty(guest, _config));
+    }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void RestoringGuestPermissionDoesNotResurrectPreviouslyIssuedGuestLinks(bool serverWide)
+    {
+        var party = Party(); var secret = Invite(party);
+        var accountLink = _store.Issue(party, _owner, false, 2, null, _config).Token;
+        var guest = _store.RedeemGuest(secret, null, _config);
+        var other = _store.Create(Guid.NewGuid(), Guid.NewGuid(), "other", GroupMode.Private, 3);
+        var otherLink = _store.Issue(other, other.Owner, true, 2, null, _config).Token;
+        if (serverWide) _config.EnableGuestInvites = false;
+        else _config.Users.Add(new UserSettings { UserId = _owner, GuestInvites = PermissionOverride.Deny });
+        _store.Sweep(_config);
+        _config.EnableGuestInvites = true; _config.Users.Clear();
+        Assert.Throws<PartyException>(() => _store.RedeemGuest(secret, null, _config));
+        Assert.Throws<PartyException>(() => _store.GuestParty(guest, _config));
+        Assert.NotNull(_store.ValidateInvite(accountLink, _config));
+        if (!serverWide) Assert.NotNull(_store.ValidateInvite(otherLink, _config));
+    }
+
+    [Fact] public void ReassignedSessionCannotInheritPrivateMembershipOrRefreshAnExhaustedInvitation()
+    {
+        var party = Party(); var secret = Invite(party, 1);
+        var engine = new Mock<ISyncPlayManager>();
+        var sessions = Mock.Of<ISessionManager>();
+        var admitted = new SessionInfo(sessions, NullLogger.Instance) { Id = "reused-device", UserId = Guid.NewGuid() };
+        engine.Setup(e => e.GetGroup(admitted, party.Id)).Returns(new GroupInfoDto(party.Id, "Party", default, [], DateTime.UtcNow));
+        using var manager = new PrivateSyncPlayManager(new CoreEngine(engine.Object), _store, sessions, () => _config);
+        manager.JoinInvite(admitted, secret, default);
+        var previousUser = admitted.UserId;
+        admitted.UserId = Guid.NewGuid();
+        Assert.Null(manager.GetGroup(admitted, party.Id));
+        Assert.Null(_store.ForSession(admitted.Id, admitted.UserId));
+        Assert.NotNull(_store.ForSession(admitted.Id, previousUser));
+        Assert.Throws<PartyException>(() => manager.JoinGroup(admitted, new JoinGroupRequest(party.Id), default));
+        Assert.Throws<PartyException>(() => manager.HandleRequest(admitted, new MediaBrowser.Controller.SyncPlay.PlaybackRequests.PauseGroupRequest(), default));
+        Assert.Throws<PartyException>(() => manager.OwnedParty(admitted, party.Id));
+        Assert.Throws<PartyException>(() => manager.JoinInvite(admitted, secret, default));
+        engine.Verify(e => e.JoinGroup(It.IsAny<SessionInfo>(), It.IsAny<JoinGroupRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+        engine.Verify(e => e.HandleRequest(It.IsAny<SessionInfo>(), It.IsAny<IGroupPlaybackRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact] public void ReassignedSessionMustRedeemANewSeatAndInvitationUse()
+    {
+        var party = Party(3); var secret = Invite(party, 3);
+        var engine = new Mock<ISyncPlayManager>(); var sessions = Mock.Of<ISessionManager>();
+        var device = new SessionInfo(sessions, NullLogger.Instance) { Id = "reused-device", UserId = Guid.NewGuid() };
+        engine.Setup(e => e.GetGroup(device, party.Id)).Returns(new GroupInfoDto(party.Id, "Party", default, [], DateTime.UtcNow));
+        using var manager = new PrivateSyncPlayManager(new CoreEngine(engine.Object), _store, sessions, () => _config);
+        manager.JoinInvite(device, secret, default); device.UserId = Guid.NewGuid();
+        manager.JoinInvite(device, secret, default);
+        Assert.True(party.IsMember(device.Id, device.UserId));
+        Assert.Equal(2, _store.Invites(party.Id).Single().Uses); Assert.Equal(2, party.Members.Count);
     }
     [Fact] public void RevokeDisconnectsExistingGuests()
     {

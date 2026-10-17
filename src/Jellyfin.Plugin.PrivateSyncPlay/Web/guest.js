@@ -1,11 +1,11 @@
 /* Guest credentials stay in HttpOnly cookies. No authenticated Jellyfin app, token or playback API is loaded. */
 (() => {
     'use strict';
-    const base = new URL('./', location.href), token = location.hash.slice(1);
+    const base = new URL('./', location.href);
     history.replaceState(null, '', location.pathname);
     const byId = id => document.getElementById(id);
     const video = byId('video'), player = byId('videoOsdPage'), status = byId('status');
-    const play = byId('play'), join = byId('join'), signIn = byId('signin');
+    const play = byId('play');
     const volume = byId('volume'), select = byId('subtitles'), subtitleStatus = byId('subtitleStatus');
     const preview = document.body.dataset.guestPreview === 'true' ? window.PrivateSyncPlayGuestPreview : null;
     const renderer = window.PrivateSyncPlayGuestPlayer.mount(player, (feature, value) => {
@@ -27,14 +27,14 @@
         ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k[0].toLowerCase() + k.slice(1), normalize(v)])) : x;
     let hls, generation, active = false, timer, hideTimer, epoch = 0, state, receivedAt = 0;
     let desiredPlaying = false, subtitleKey, subtitleElement, subtitleChoice = 'auto', trackSignature;
+    let bandwidthKbps, attachedAt = 0, feedbackAt = 0, stalledAt = 0;
+    let nativeAbsoluteTimeline = false, timelineKnown = false;
     const mobile = window.matchMedia('(max-width: 50em)');
     function layout() {
         document.documentElement.classList.toggle('layout-mobile', mobile.matches);
         document.documentElement.classList.toggle('layout-desktop', !mobile.matches);
     }
     mobile.addEventListener('change', layout); layout();
-    signIn.href = new URL('Account', base).href + '#' + encodeURIComponent(token);
-    if (!token) { join.hidden = true; signIn.hidden = true; }
     function message(text) { status.textContent = text; byId('playerStatus').textContent = text; }
     function showControls() {
         player.classList.remove('privateSyncPlayControlsHidden'); clearTimeout(hideTimer);
@@ -62,14 +62,17 @@
     }
     function clearStream() {
         generation = null; clearSubtitle();
+        bandwidthKbps = undefined; attachedAt = 0; feedbackAt = 0; stalledAt = 0;
+        nativeAbsoluteTimeline = false; timelineKnown = false;
         if (hls) { hls.destroy(); hls = null; }
         video.pause(); video.removeAttribute('src'); video.load();
     }
     function end(text) {
         epoch++; active = false; desiredPlaying = false;
+        document.body.classList.remove('privateSyncPlayWatching');
         clearTimeout(timer); clearTimeout(hideTimer); clearStream();
         player.hidden = true; status.hidden = false; play.hidden = true; document.querySelector('h1').hidden = false;
-        byId('actions').hidden = !token; join.disabled = false; message(text);
+        message(text);
         if (document.fullscreenElement === player) void document.exitFullscreen().catch(() => {});
     }
     async function enablePlayback() {
@@ -140,7 +143,7 @@
         clearSubtitle();
         if (!info) { subtitleStatus.textContent = 'Subtitles off. Styled/bitmap tracks follow the party when selected by its player.'; return; }
         subtitleKey = key;
-        const offset = state.offset;
+        const offset = timelineOffset();
         const track = document.createElement('track'); subtitleElement = track;
         track.kind = 'subtitles'; track.label = info.label;
         if (/^[a-z]{2,3}(?:-[a-z0-9]+)*$/i.test(info.language || '')) track.srclang = info.language;
@@ -164,11 +167,31 @@
         const seconds = Math.max(0, Math.floor(value || 0)), minutes = Math.floor(seconds / 60);
         return (minutes >= 60 ? Math.floor(minutes / 60) + ':' + String(minutes % 60).padStart(2, '0') : String(minutes)) + ':' + String(seconds % 60).padStart(2, '0');
     };
-    function targetTime() { return Math.max(0, (state?.position || 0) - (state?.offset || 0) + (desiredPlaying ? Math.min(1.5, (performance.now() - receivedAt) / 1000) : 0)); }
+    function timelineOffset() { return nativeAbsoluteTimeline ? 0 : (state?.offset || 0); }
+    function targetTime() { return Math.max(0, (state?.position || 0) - timelineOffset() + (desiredPlaying ? Math.min(1.5, (performance.now() - receivedAt) / 1000) : 0)); }
     function followPosition() {
         if (preview || !generation || !state) return;
+        // HLS.js rebases a borrowed window to zero; native HLS may retain the original TS timeline.
+        // Infer that axis from the initial seekable range, not browser sniffing or a guessed seek.
+        if (!hls && state.playbackMethod === 'Shared' && !timelineKnown && video.seekable.length) {
+            nativeAbsoluteTimeline = state.offset > 1.5 && Math.abs(video.seekable.start(0) - state.offset) < 1.5;
+            timelineKnown = true;
+            if (nativeAbsoluteTimeline) { clearSubtitle(); updateSubtitles(); }
+        }
         const target = targetTime();
         for (let i = 0; i < video.buffered.length; i++) if (target >= video.buffered.start(i) && target <= video.buffered.end(i) && Math.abs(video.currentTime - target) > 1.5) { video.currentTime = target; break; }
+    }
+    video.addEventListener('loadedmetadata', followPosition);
+    video.addEventListener('waiting', () => { if (active && desiredPlaying && video.currentTime > 0) stalledAt = performance.now(); });
+    function networkStateRequest() {
+        const now = performance.now();
+        if (preview || !generation || !desiredPlaying || !play.hidden || now - attachedAt < 10000 || now - feedbackAt < 5000) return 'State';
+        let buffer = 0;
+        for (let i = 0; i < video.buffered.length; i++) if (video.currentTime >= video.buffered.start(i) && video.currentTime <= video.buffered.end(i)) buffer = video.buffered.end(i) - video.currentTime;
+        const parameters = new URLSearchParams({ generation, bufferSeconds:String(Math.min(120, Math.max(0, buffer))), stalled:String(stalledAt > feedbackAt) });
+        if (bandwidthKbps) parameters.set('bandwidthKbps',String(bandwidthKbps));
+        feedbackAt = now;
+        return 'State?' + parameters;
     }
     // No local transport controls. These guards also restore accidental browser/media-key changes.
     video.addEventListener('pause', () => { if (active && desiredPlaying && generation && !video.ended) void enablePlayback(); });
@@ -190,7 +213,7 @@
         if (!active) return;
         const mine = epoch;
         try {
-            const next = preview ? preview.state(video) : await request('State');
+            const next = preview ? preview.state(video) : await request(networkStateRequest());
             if (!active || mine !== epoch) return;
             state = next; receivedAt = performance.now(); desiredPlaying = state.playing && !state.paused;
             applyPolicy(state.player);
@@ -204,12 +227,23 @@
             else if (state.paused) { hls?.stopLoad(); video.pause(); play.hidden = true; select.disabled = true; subtitleStatus.textContent = 'Party paused. Subtitle selection is available when it resumes.'; showControls(); }
             else if (state.ready && state.generation !== generation) {
                 clearStream(); generation = state.generation;
+                attachedAt = performance.now();
                 const url = new URL(`Guest/media/${generation}/index.m3u8`, base).href;
+                const sampleGeneration = generation;
                 if (window.Hls?.isSupported()) {
-                    hls = new Hls({ enableWorker: true, backBufferLength: 10, maxBufferLength: 12 });
+                    hls = new Hls({ enableWorker: true, backBufferLength: 10, maxBufferLength: 12, startPosition:Math.max(0, state.position - state.offset) });
                     hls.loadSource(url); hls.attachMedia(video);
-                    hls.on(Hls.Events.MANIFEST_PARSED, enablePlayback);
-                    hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) { clearStream(); message('Reconnecting to party stream…'); } });
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => { if (generation === sampleGeneration) void enablePlayback(); });
+                    hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
+                        if (generation !== sampleGeneration) return;
+                        if (data.frag?.type && data.frag.type !== 'main') return;
+                        const stats = data.frag?.stats || data.stats;
+                        const elapsed = stats?.loading?.end - stats?.loading?.start;
+                        if (!(elapsed > 0) || !(stats?.loaded > 0)) return;
+                        const sample = Math.min(200000, Math.max(1, Math.round(stats.loaded * 8 / elapsed)));
+                        bandwidthKbps = bandwidthKbps ? Math.round(sample < bandwidthKbps ? sample : bandwidthKbps * .7 + sample * .3) : sample;
+                    });
+                    hls.on(Hls.Events.ERROR, (_, data) => { if (generation === sampleGeneration && data.fatal) { clearStream(); message('Reconnecting to party stream…'); } });
                 } else if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; void enablePlayback(); }
                 else { end('This browser does not support HLS playback.'); return; }
             }
@@ -224,18 +258,14 @@
     }
     async function start() {
         epoch++; active = true; player.hidden = false; status.hidden = true; document.querySelector('h1').hidden = true;
-        byId('actions').hidden = true; player.focus(); showControls(); await poll();
+        document.body.classList.add('privateSyncPlayWatching');
+        player.focus(); showControls(); await poll();
     }
-    join.onclick = async () => {
-        join.disabled = true;
-        try { await request('Redeem', { Token: token }); await start(); }
-        catch (error) { message(error.message); join.disabled = false; }
-    };
     byId('leave').onclick = async () => {
         if (preview) { message('Preview: this action leaves the party in the real player.'); return; }
         end('You left the party.'); try { await request('Leave', {}); } catch { message('Playback stopped. The guest seat will expire if the server could not be reached.'); }
     };
     if (preview) { preview.configure(applyPolicy); preview.start(video); void start(); void enablePlayback(); }
-    else if (!token) void start();
+    else void start();
     window.addEventListener('pagehide', () => { epoch++; active = false; desiredPlaying = false; clearTimeout(timer); clearTimeout(hideTimer); clearStream(); });
 })();

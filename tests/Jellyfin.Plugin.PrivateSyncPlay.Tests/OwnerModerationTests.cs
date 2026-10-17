@@ -28,7 +28,7 @@ public sealed class OwnerModerationTests : IDisposable
         _second = Session("friend-second-device", _friend.UserId); _outsider = Session("outsider", Guid.NewGuid());
         _sessions.SetupGet(s => s.Sessions).Returns(_active);
         _party = _store.Create(Guid.NewGuid(), _host.UserId, _host.Id, GroupMode.Private, 10);
-        _party.Members.UnionWith([_friend.Id, _second.Id]); _party.Account(_friend.UserId);
+        _party.Members.Add(_friend.Id, _friend.UserId); _party.Members.Add(_second.Id, _second.UserId); _party.Account(_friend.UserId);
         _engine.Setup(e => e.GetGroup(It.IsAny<SessionInfo>(), It.IsAny<Guid>())).Returns((SessionInfo _, Guid id) =>
             _store.Parties.ContainsKey(id) ? new GroupInfoDto(id, "Party", default, [], DateTime.UtcNow) : null!);
         _manager = new(new CoreEngine(_engine.Object), _store, _sessions.Object, () => _config);
@@ -107,14 +107,14 @@ public sealed class OwnerModerationTests : IDisposable
         _engine.Setup(e => e.LeaveGroup(It.IsAny<SessionInfo>(), It.IsAny<LeaveGroupRequest>(), It.IsAny<CancellationToken>()))
             .Callback(() => { Assert.DoesNotContain(_friend.Id, _party.Members); Assert.DoesNotContain(_second.Id, _party.Members); });
         _manager.Kick(_host, _party.Id, FriendId);
-        Assert.Same(_party, _store.ForSession(_host.Id)); Assert.Contains(_friend.UserId, _party.BlockedUsers);
+        Assert.Same(_party, _store.ForSession(_host.Id, _host.UserId)); Assert.Contains(_friend.UserId, _party.BlockedUsers);
         var nextDevice = Session("fresh-device", _friend.UserId);
         Assert.Equal(403, Assert.Throws<PartyException>(() => _manager.JoinCode(nextDevice, _party.Code, default)).Status);
         Assert.Equal(403, Assert.Throws<PartyException>(() => _manager.JoinInvite(nextDevice, invite, default)).Status);
         Assert.Throws<PartyException>(() => _manager.HandleRequest(_friend, Request(PlaybackRequestType.Pause), default));
         Assert.Equal(0, _store.Invites(_party.Id).Single().Uses);
         _engine.Verify(e => e.LeaveGroup(It.IsAny<SessionInfo>(), It.IsAny<LeaveGroupRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
-        _manager.Unblock(_host, _party.Id, FriendId); Assert.Null(_store.ForSession(nextDevice.Id));
+        _manager.Unblock(_host, _party.Id, FriendId); Assert.Null(_store.ForSession(nextDevice.Id, nextDevice.UserId));
         _manager.JoinCode(nextDevice, _party.Code, default); Assert.Contains(nextDevice.Id, _party.Members);
     }
     [Fact] public void GuestKickRevokesItsSharedLinkAndLeasesButNotUnrelatedInvitations()
@@ -157,22 +157,23 @@ public sealed class OwnerModerationTests : IDisposable
         _manager.UpdatePolicy(_host, _party.Id, new(), 10);
         Assert.Throws<PartyException>(() => _store.GuestParty(guest, _config)); Assert.Throws<PartyException>(() => _store.ValidateInvite(link, _config));
     }
-    [Fact] public async Task GuestPermissionsAreAnIntersectionAndCaptionDenialIsEnforcedAtTheEndpoint()
+    [Fact] public async Task GuestOptionsAreAdministratorOnlyAndCaptionDenialIsEnforcedAtTheEndpoint()
     {
-        var guest = _store.RedeemGuest(Invite(), null, _config); var id = _store.GuestSession(guest, _config).Id;
-        _manager.UpdatePolicy(_host, _party.Id, new(GuestFeatures:["volume", "subtitles"]), 10);
-        Assert.Throws<PartyException>(() => _manager.SetGuestPermissions(_host, _party.Id, id, ["fullscreen"]));
-        _manager.SetGuestPermissions(_host, _party.Id, id, ["volume"]);
+        var guest = _store.RedeemGuest(Invite(), null, _config);
+        var secondGuest = _store.RedeemGuest(Invite(), null, _config);
+        _config.GuestPlayer.Features = ["volume"];
+        _manager.UpdatePolicy(_host, _party.Id, new(ParticipantsControlPlayback:false), 10);
         Assert.Equal(new[] { "volume" }, _store.GuestOptions(guest, _config).Features);
+        Assert.Equal(_store.GuestOptions(guest, _config).Features, _store.GuestOptions(secondGuest, _config).Features);
         var context = new DefaultHttpContext(); context.Request.Scheme = "https"; context.Request.Host = new("party.example"); context.Request.Headers.Cookie = "PrivateSyncPlay.Guest=" + guest;
         var controller = new GuestController(_store, null!, () => _config) { ControllerContext = new() { HttpContext = context } };
         using var subtitles = new GuestSubtitles(Mock.Of<MediaBrowser.Controller.MediaEncoding.ISubtitleEncoder>(), TimeProvider.System);
         Assert.Equal(403, (await Assert.ThrowsAsync<PartyException>(() => controller.Subtitle("generation", 2, subtitles))).Status);
-        _manager.SetGuestPermissions(_host, _party.Id, id, null); Assert.True(_store.GuestOptions(guest, _config).Allows("subtitles"));
-        _config.GuestPlayer.Features = ["volume"];
-        Assert.False(_store.GuestOptions(guest, _config).Allows("subtitles"));
-        Assert.Throws<PartyException>(() => _manager.UpdatePolicy(_host, _party.Id, new(GuestFeatures:["subtitles"]), 10));
-        Assert.Throws<PartyException>(() => _manager.SetGuestPermissions(_host, _party.Id, id, ["pause"]));
+        _config.GuestPlayer.Features = ["volume", "subtitles"];
+        Assert.True(_store.GuestOptions(guest, _config).Allows("subtitles"));
+        Assert.True(_store.GuestOptions(secondGuest, _config).Allows("subtitles"));
+        Assert.DoesNotContain(typeof(PrivateSyncPlayManager).GetMethods(), m => m.Name == "SetGuestPermissions");
+        Assert.Null(typeof(PartyPolicy).GetProperty("GuestFeatures")); Assert.Null(typeof(Guest).GetProperty("Features"));
     }
     [Fact] public void NativeRemovalFailureEndsOnlyThisPartyAndRevokesItsGuestAccess()
     {

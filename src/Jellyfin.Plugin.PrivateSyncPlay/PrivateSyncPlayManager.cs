@@ -56,7 +56,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         {
             Status.EnsureAvailable();
             var party = _store.Require(request.GroupId); // Unknown groups are never assumed public.
-            if (party.Mode == GroupMode.Private && !party.Members.Contains(session.Id))
+            if (party.Mode == GroupMode.Private && !party.IsMember(session.Id, session.UserId))
                 throw new PartyException(404, "Party not found. Use an invitation.");
             JoinAuthorized(session, party, cancellationToken);
         }
@@ -80,9 +80,10 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
             Status.EnsureAvailable();
             _store.RateLimit("invite:" + session.UserId);
             // An existing member need not redeem again when refreshing a full/used invite.
-            var invite = _store.ValidateInvite(secret, Config, session.Id);
+            var admitted = _store.ForSession(session.Id, session.UserId) is not null;
+            var invite = _store.ValidateInvite(secret, Config, admitted ? session.Id : null);
             var party = _store.Require(invite.PartyId);
-            var existing = party.Members.Contains(session.Id);
+            var existing = party.IsMember(session.Id, session.UserId);
             JoinAuthorized(session, party, token);
             if (!existing) invite.Uses++;
         }
@@ -90,16 +91,18 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
 
     private void JoinAuthorized(SessionInfo session, Party party, CancellationToken token)
     {
+        if (party.Members.ContainsKey(session.Id) && !party.IsMember(session.Id, session.UserId))
+            _store.RemoveSession(session.Id);
         if (party.BlockedUsers.Contains(session.UserId)) throw new PartyException(403, "You have been removed from this party.");
-        if (!party.Policy.AllowJoins && !party.Members.Contains(session.Id) && session.UserId != party.Owner)
+        if (!party.Policy.AllowJoins && !party.IsMember(session.Id, session.UserId) && session.UserId != party.Owner)
             throw new PartyException(403, "This party is not accepting new viewers.");
         _store.CheckSeat(party, session.Id, Config);
         if (_inner.GetGroup(session, party.Id) is null) throw new PartyException(403, "You cannot access this party's media.");
         _inner.JoinGroup(session, new JoinGroupRequest(party.Id), token);
-        if (!party.Members.Contains(session.Id))
+        if (!party.IsMember(session.Id, session.UserId))
         {
             _store.RemoveSession(session.Id);
-            party.Members.Add(session.Id);
+            party.Members.Add(session.Id, session.UserId);
         }
         party.Account(session.UserId);
         ApplyWaitPermissions(party);
@@ -124,7 +127,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         lock (_store.Gate)
         {
             Status.EnsureAvailable();
-            if (!_store.Parties.TryGetValue(groupId, out var p) || p.BlockedUsers.Contains(session.UserId) || (p.Mode == GroupMode.Private && !p.Members.Contains(session.Id))) return null;
+            if (!_store.Parties.TryGetValue(groupId, out var p) || p.BlockedUsers.Contains(session.UserId) || (p.Mode == GroupMode.Private && !p.IsMember(session.Id, session.UserId))) return null;
             return _inner.GetGroup(session, groupId);
         }
     }
@@ -133,7 +136,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         lock (_store.Gate)
         {
             Status.EnsureAvailable();
-            var party = _store.ForSession(session.Id) ?? throw new PartyException(404, "Party not found.");
+            var party = _store.ForSession(session.Id, session.UserId) ?? throw new PartyException(404, "Party not found.");
             if (party.BlockedUsers.Contains(session.UserId)) throw new PartyException(403, "You have been removed from this party.");
             if (request is null) throw new PartyException(400, "A playback request is required.");
             var control = party.CanControl(session.UserId);
@@ -158,7 +161,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
     {
         Status.EnsureAvailable();
         _store.Sweep(Config);
-        var party = _store.ForSession(actor.Id);
+        var party = _store.ForSession(actor.Id, actor.UserId);
         if (party?.Id != id) throw new PartyException(404, "Party not found for this session.");
         if (party.Owner != actor.UserId) throw new PartyException(403, "Only the party owner may manage participants.");
         return party;
@@ -168,10 +171,9 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         lock (_store.Gate)
         {
             var party = OwnedParty(actor, id);
-            ValidateFeatures(policy.GuestFeatures);
             if (capacity < party.Members.Count + (policy.AllowGuests ? _store.GuestCount(id) : 0) || capacity < 1 || capacity > Config.MaxViewers)
                 throw new PartyException(400, "The viewer limit must cover current viewers and stay within the server limit.");
-            party.Policy = policy with { GuestFeatures = policy.GuestFeatures?.ToArray() }; party.Capacity = capacity;
+            party.Policy = policy; party.Capacity = capacity;
             if (!policy.AllowGuests) _store.RevokeGuestInvitations(party);
             ApplyWaitPermissions(party);
         }
@@ -186,22 +188,6 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
             account.ControlPlayback = control; account.EditQueue = queue; ApplyWaitPermissions(party);
         }
     }
-    public void SetGuestPermissions(SessionInfo actor, Guid partyId, Guid participant, string[]? features)
-    {
-        lock (_store.Gate)
-        {
-            var party = OwnedParty(actor, partyId); ValidateFeatures(features);
-            var guest = _store.Guests(party.Id).FirstOrDefault(g => g.Id == participant) ?? throw new PartyException(404, "Guest not found.");
-            if (features?.Any(f => party.Policy.GuestFeatures is not null && !party.Policy.GuestFeatures.Contains(f, StringComparer.Ordinal)) == true)
-                throw new PartyException(403, "Guest features cannot exceed the party's allowed features.");
-            guest.Features = features?.ToArray();
-        }
-    }
-    private void ValidateFeatures(string[]? features)
-    {
-        if (features is not null && (features.Length > GuestPlayerPolicy.Features.Length || features.Distinct(StringComparer.Ordinal).Count() != features.Length
-            || features.Any(f => !Config.GuestPlayer.Allows(f)))) throw new PartyException(403, "Guest features cannot exceed the administrator's allowlist.");
-    }
     public void Kick(SessionInfo actor, Guid partyId, Guid participant)
     {
         lock (_store.Gate)
@@ -211,7 +197,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
             if (guest is not null) { _store.Revoke(party, guest.InviteId); return; }
             var account = party.Accounts.Values.FirstOrDefault(a => a.Id == participant) ?? throw new PartyException(404, "Participant not found.");
             if (account.UserId == party.Owner) throw new PartyException(400, "The owner cannot be kicked. Leave or end the party instead.");
-            var targets = _sessions.Sessions.Where(s => s.UserId == account.UserId && party.Members.Contains(s.Id)).ToArray();
+            var targets = _sessions.Sessions.Where(s => s.UserId == account.UserId && party.IsMember(s.Id, s.UserId)).ToArray();
             party.BlockedUsers.Add(account.UserId);
             foreach (var session in targets) _store.RemoveSession(session.Id); // Revoke plugin access before native cleanup.
             try { foreach (var session in targets) _inner.LeaveGroup(session, new LeaveGroupRequest(), CancellationToken.None); }
@@ -235,7 +221,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
     {
         try
         {
-            foreach (var session in _sessions.Sessions.Where(s => party.Members.Contains(s.Id)))
+            foreach (var session in _sessions.Sessions.Where(s => party.IsMember(s.Id, s.UserId)))
             {
                 var readOnly = !party.CanControl(session.UserId);
                 if (readOnly == party.ReadOnlySessions.Contains(session.Id)) continue;
@@ -256,7 +242,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
             var party = _store.Require(id);
             // Revoke before contacting the native engine: failed cleanup must never leave a valid lease.
             _store.Close(id);
-            foreach (var session in _sessions.Sessions.Where(s => party.Members.Contains(s.Id)).ToArray())
+            foreach (var session in _sessions.Sessions.Where(s => party.IsMember(s.Id, s.UserId)).ToArray())
             {
                 try { _inner.LeaveGroup(session, new LeaveGroupRequest(), CancellationToken.None); }
                 catch (Exception error) { _logger.LogWarning("Native SyncPlay group cleanup failed ({ErrorType}).", error.GetType().Name); }

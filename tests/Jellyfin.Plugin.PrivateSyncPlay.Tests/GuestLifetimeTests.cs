@@ -47,11 +47,20 @@ public sealed class GuestLifetimeTests : IDisposable
         Assert.Equal(410, Assert.Throws<PartyException>(() => _media.State(_party)).Status);
         Assert.Empty(_store.Parties);
     }
+    [Fact] public void ReassignedFinalMemberCannotKeepGuestsAliveBeforeMaintenanceRuns()
+    {
+        _friend.SyncPlayAccess = SyncPlayUserAccessType.CreateAndJoinGroups;
+        _friend.Permissions.Add(new Permission(PermissionKind.EnableMediaPlayback, true));
+        _sessions[0].UserId = _friend.Id;
+        Assert.Equal(410, Assert.Throws<PartyException>(() => _media.State(_party)).Status);
+        Assert.Empty(_store.Parties);
+        Assert.Throws<PartyException>(() => _store.GuestParty(_guest, _config));
+    }
     [Fact] public void RemainingDisabledMemberCannotKeepOwnerSharingAlive()
     {
         var sessions = Mock.Of<ISessionManager>();
         _sessions.Clear(); _sessions.Add(new SessionInfo(sessions, NullLogger.Instance) { Id = "friend", UserId = _friend.Id });
-        _party.Members.Add("friend");
+        _party.Members.Add("friend", _friend.Id);
         _friend.Permissions.Add(new Permission(PermissionKind.IsDisabled, true));
         Assert.Equal(410, Assert.Throws<PartyException>(() => _media.Read(_party, "known-generation", "index.m3u8")).Status);
         Assert.Empty(_store.Parties);
@@ -80,7 +89,7 @@ public sealed class GuestLifetimeTests : IDisposable
         var sessions = Mock.Of<ISessionManager>();
         _sessions.Clear(); _sessions.Add(new SessionInfo(sessions, NullLogger.Instance) { Id = "friend", UserId = _friend.Id,
             NowPlayingItem = new MediaBrowser.Model.Dto.BaseItemDto { Id = Guid.NewGuid() } });
-        _party.Members.Add("friend"); _store.RemoveSession("host"); _party.Account(_friend.Id).ControlPlayback = false;
+        _party.Members.Add("friend", _friend.Id); _store.RemoveSession("host"); _party.Account(_friend.Id).ControlPlayback = false;
         var state = _media.State(_party);
         Assert.False(state.Playing); Assert.Same(_party, _store.GuestParty(_guest, _config));
     }

@@ -86,7 +86,7 @@ public sealed class GuestPlayerPolicyTests
         var preview = Assert.IsType<ContentResult>(controller.Preview());
         Assert.Contains("data-guest-preview=\"true\"", preview.Content); Assert.Contains("assets/guest-preview.js", preview.Content);
         Assert.Contains("connect-src 'none'", controller.Response.Headers.ContentSecurityPolicy.ToString());
-        var watch = Assert.IsType<ContentResult>(controller.Watch());
+        var watch = Assert.IsType<ContentResult>(controller.GuestPlayer());
         Assert.Contains("data-guest-preview=\"false\"", watch.Content); Assert.DoesNotContain("assets/guest-preview.js", watch.Content);
         Assert.Contains("frame-ancestors 'none'", controller.Response.Headers.ContentSecurityPolicy.ToString());
     }

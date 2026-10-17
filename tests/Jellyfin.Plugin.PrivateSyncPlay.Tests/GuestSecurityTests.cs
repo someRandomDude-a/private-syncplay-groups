@@ -41,6 +41,15 @@ public sealed class GuestSecurityTests
         Assert.Equal(401, Assert.Throws<PartyException>(() => Controller().State()).Status);
         Assert.Equal(401, Assert.Throws<PartyException>(() => Controller().Stream("anything", "index.m3u8")).Status);
     }
+    [Theory]
+    [InlineData("https://evil.example")]
+    [InlineData("https://other.party.example")]
+    [InlineData("null")]
+    [InlineData("")]
+    public void InvitationOptionsRequireSameOrigin(string origin)
+    {
+        Assert.Equal(403, Assert.Throws<PartyException>(() => Controller(origin: origin).Options(new TokenRequest(new string('A', 64)))).Status);
+    }
     [Fact] public async Task UnknownGuestCannotStartSubtitleConversion()
     {
         var encoder = new Mock<ISubtitleEncoder>();
@@ -63,7 +72,7 @@ public sealed class GuestSecurityTests
     [Fact] public void GuestControllerExposesNoControlOrLibraryRoutes()
     {
         var methods = typeof(GuestController).GetMethods(BindingFlags.Public | BindingFlags.DeclaredOnly | BindingFlags.Instance);
-        Assert.Equal(new[] { "Leave", "Redeem", "State", "Stream", "Subtitle" }, methods.Select(m => m.Name).Order().ToArray());
+        Assert.Equal(new[] { "Leave", "Options", "Redeem", "State", "Stream", "Subtitle" }, methods.Select(m => m.Name).Order().ToArray());
         Assert.NotNull(typeof(GuestController).GetCustomAttribute<AllowAnonymousAttribute>());
         Assert.DoesNotContain(typeof(ServiceRegistrator).Assembly.GetTypes(), t => t.GetInterfaces().Any(i => i.FullName == "Microsoft.AspNetCore.Authentication.IAuthenticationHandler"));
     }
@@ -82,5 +91,18 @@ public sealed class GuestSecurityTests
         Assert.IsType<NotFoundResult>(c.Asset("../../Plugin.cs"));
         Assert.IsType<NotFoundResult>(c.Asset("settings.html"));
         Assert.IsType<FileStreamResult>(c.Asset("hls.js"));
+    }
+    [Fact] public void InvitationLandingIsSeparateFromTheCredentialFreeGuestPlayer()
+    {
+        var c = new AssetsController(new NativeWebStyles(Mock.Of<IApplicationPaths>())) { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+        var landing = Assert.IsType<ContentResult>(c.Watch()).Content!;
+        Assert.Contains("assets/watch-entry.js", landing); Assert.Contains("hidden disabled", landing);
+        Assert.DoesNotContain("assets/guest.js", landing); Assert.DoesNotContain("<video", landing);
+        Assert.Contains("connect-src 'self'", c.Response.Headers.ContentSecurityPolicy.ToString());
+        Assert.Contains("frame-ancestors 'none'", c.Response.Headers.ContentSecurityPolicy.ToString());
+        Assert.Equal("no-store", c.Response.Headers.CacheControl.ToString());
+        var player = Assert.IsType<ContentResult>(c.GuestPlayer()).Content!;
+        Assert.Contains("assets/guest.js", player); Assert.DoesNotContain("assets/watch-entry.js", player);
+        Assert.DoesNotContain("id=\"join\"", player); Assert.DoesNotContain("id=\"signin\"", player);
     }
 }

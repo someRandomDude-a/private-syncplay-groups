@@ -10,18 +10,18 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
     private const string CookieName = "PrivateSyncPlay.Guest";
     private Configuration Config => configuration();
     private string Credential => Request.Cookies[CookieName] ?? string.Empty;
-    private void Headers()
+    private void Headers(bool requireHttps = true)
     {
-        if (!Request.IsHttps) throw new PartyException(403, "Guest viewing requires HTTPS.");
+        if (requireHttps && !Request.IsHttps) throw new PartyException(403, "Guest viewing requires HTTPS.");
         var site = Request.Headers["Sec-Fetch-Site"].ToString();
         if (site.Length > 0 && site is not ("same-origin" or "none")) throw new PartyException(403, "Same-origin requests are required.");
         // SameSite cookies are site-scoped, not origin-scoped: also reject sibling-subdomain requests.
-        if (Request.Headers.ContainsKey("Origin")) SameOrigin();
+        if (Request.Headers.ContainsKey("Origin")) SameOrigin(requireHttps);
         Response.Headers.CacheControl = "no-store, private";
         Response.Headers["Referrer-Policy"] = "no-referrer";
         Response.Headers.XContentTypeOptions = "nosniff";
     }
-    private void SameOrigin()
+    private void SameOrigin(bool requireHttps = true)
     {
         var origin = Request.Headers.Origin.ToString();
         if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)
@@ -29,7 +29,21 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
             || !string.Equals(uri.Host, expected.Host, StringComparison.OrdinalIgnoreCase) || uri.Port != expected.Port
             || uri.Scheme != expected.Scheme || uri.UserInfo.Length != 0 || uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0)
             throw new PartyException(403, "Same-origin requests are required.");
-        if (!Request.IsHttps) throw new PartyException(403, "Guest viewing requires HTTPS.");
+        if (requireHttps && !Request.IsHttps) throw new PartyException(403, "Guest viewing requires HTTPS.");
+    }
+    [HttpPost("Options")]
+    public object Options(TokenRequest request)
+    {
+        // Account-only invitations can be opened over HTTP; they must never advertise guest admission.
+        SameOrigin(requireHttps: false);
+        Headers(requireHttps: false);
+        lock (store.Gate)
+        {
+            store.RateLimit("invite-options-ip:" + HttpContext.Connection.RemoteIpAddress, 60);
+            store.RateLimit("invite-options-global", 600);
+            var allowed = store.GuestAdmissionAllowed(request.Token, Request.IsHttps ? Credential : null, Config);
+            return new { AllowGuests = Request.IsHttps && allowed };
+        }
     }
     [HttpPost("Redeem")]
     public IActionResult Redeem(TokenRequest request)
@@ -48,7 +62,7 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
     }
     // Only state polling extends a lease; background media downloads cannot keep a seat alive.
     [HttpGet("State")]
-    public object State()
+    public object State(string? generation = null, int? bandwidthKbps = null, double? bufferSeconds = null, bool stalled = false)
     {
         Headers();
         lock (store.Gate)
@@ -57,6 +71,8 @@ public sealed class GuestController(PartyStore store, GuestMedia media, Func<Con
             store.RateLimitGuest(Credential, "state", 120);
             store.GuestParty(Credential, Config, heartbeat: true);
             var options = store.GuestOptions(Credential, Config);
+            if (generation is not null && bufferSeconds.HasValue)
+                media.ReportQuality(party, store.GuestSession(Credential, Config).Id, generation, bandwidthKbps, bufferSeconds.Value, stalled);
             var state = media.State(party);
             return state with { Title = options.Allows("title") ? state.Title : null,
                 Subtitles = options.Allows("subtitles") ? state.Subtitles : [], SelectedSubtitleIndex = options.Allows("subtitles") ? state.SelectedSubtitleIndex : null,

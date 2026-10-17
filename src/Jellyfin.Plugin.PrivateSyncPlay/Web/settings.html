@@ -213,7 +213,7 @@
             input.min = spec[1]; input.max = spec[2]; input.required = true;
             input.oninput = function () { markDirty(false); };
         });
-        UI.element('p', 'Compatible streams are copied. Required conversion follows Jellyfin’s Playback → Transcoding settings, including hardware acceleration.', editor, 'fieldDescription');
+        UI.element('p', 'The bitrate is a maximum video budget, not a fixed quality. A compatible existing party HLS stream is reused first; otherwise one guest stream adapts conservatively to the slowest measured guest. Audio/mux overhead needs additional bandwidth. Required conversion and resolution follow Jellyfin’s Playback → Transcoding settings, including hardware acceleration.', editor, 'fieldDescription');
         userTable(users, editor);
         feedback = UI.status(form, 'pspResult');
         var save = UI.button('Save', editor, null, 'primary'); save.type = 'submit'; save.id = 'pspSave';

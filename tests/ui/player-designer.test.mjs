@@ -35,7 +35,17 @@ test('designer renders an opaque sandbox of the actual guest shell, with native 
         assert(!JSON.stringify(p.fixture.messages).includes('UserId'));assert(!JSON.stringify(p.fixture.messages).includes('Token'));
         assert(p.d.getElementById('pspPlayerCanvasStatus').textContent.includes('connected'));
         const size=p.d.getElementById('pspPlayerViewport');size.value='Wide player';size.dispatchEvent(new p.w.Event('change'));assert.equal(f.style.inlineSize,'64em');
+        size.value='Narrow player';size.dispatchEvent(new p.w.Event('change'));assert.equal(f.style.inlineSize,'24em');
+        size.value='Fit canvas';size.dispatchEvent(new p.w.Event('change'));assert.equal(f.style.inlineSize,'100%');
     }finally{p.close();}
+});
+test('designer gives the player the available settings width and moves the sidebar only when the content is wide enough',async()=>{
+    const css=await readFile(new URL('ui.css',root),'utf8');
+    assert.match(css,/\.privateSyncPlayDesigner \.content-primary\s*\{[^}]*max-inline-size:\s*none;[^}]*container-type:\s*inline-size/);
+    assert.match(css,/\.privateSyncPlayDesigner #pspPlayerForm\s*\{[^}]*max-inline-size:\s*none/);
+    assert.match(css,/\.privateSyncPlayDesigner \.privateSyncPlayDesignerGrid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/);
+    assert.match(css,/@container \(min-width: 100em\)\s*\{\s*\.privateSyncPlayDesigner \.privateSyncPlayDesignerGrid\s*\{[^}]*20em/);
+    assert.match(css,/\.privateSyncPlayDesigner \.privateSyncPlayPlayerPreview\s*\{[^}]*display:\s*block;[^}]*inline-size:\s*100%;[^}]*aspect-ratio:\s*16\/9/);
 });
 test('embedded player neutralizes normal page padding without replacing theme colors or control styling',async()=>{
     const css=await readFile(new URL('ui.css',root),'utf8');

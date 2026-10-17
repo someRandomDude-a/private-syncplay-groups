@@ -63,7 +63,7 @@ public interface IWatchPartyService
     /// <summary>Replaces party policy without changing administrator settings or per-participant overrides.</summary>
     /// <remarks>Read-modify-write the current Policy with a with-expression. Disabling guests permanently revokes guest-enabled links and their leases.</remarks>
     /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
-    /// <param name="policy">Complete party policy. Null guest features inherit administrator policy.</param><param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
+    /// <param name="policy">Complete admission, capacity and account-control policy. Guest player options are administrator-only.</param><param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
     Task UpdatePolicyAsync(Guid userId, string sessionId, Guid partyId, WatchPartyPolicy policy, CancellationToken cancellationToken = default);
 
     /// <summary>Sets permissions for all devices of one account in this party; cannot demote the owner or bypass party/admin ceilings.</summary>
@@ -71,12 +71,6 @@ public interface IWatchPartyService
     /// <param name="participantId">Account participant ID from the management snapshot, not a Jellyfin user ID.</param><param name="permissions">Playback/queue permissions; queue editing also requires playback.</param>
     /// <param name="cancellationToken">Cancellation before mutation.</param><returns>Completion.</returns>
     Task SetAccountPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyAccountPermissions permissions, CancellationToken cancellationToken = default);
-
-    /// <summary>Narrows optional features for one current guest lease, or resets it to party inheritance.</summary>
-    /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>
-    /// <param name="participantId">Guest participant ID from the snapshot.</param><param name="options">Null Features inherits; an empty collection disables all optional features.</param>
-    /// <param name="cancellationToken">Cancellation before mutation.</param><returns>Completion. Guests never gain account or SyncPlay privileges.</returns>
-    Task SetGuestPermissionsAsync(Guid userId, string sessionId, Guid partyId, Guid participantId, WatchPartyGuestPermissions options, CancellationToken cancellationToken = default);
 
     /// <summary>Removes all of an account's devices and blocks rejoining this party. Does not ban the Jellyfin account.</summary>
     /// <param name="userId">Authenticated owner.</param><param name="sessionId">Active party session.</param><param name="partyId">Exact party.</param>

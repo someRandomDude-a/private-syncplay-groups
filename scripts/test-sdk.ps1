@@ -21,6 +21,7 @@ foreach ($api in @('IWatchPartyService', 'GetManagementAsync', 'KickGuestAndRevo
     if (-not $xml.Contains($api)) { throw "Missing IntelliSense documentation for $api" }
 }
 if ($xml.Contains('IWatchPartyManagementService')) { throw 'The SDK must expose one current service, not a compatibility companion.' }
+if ($xml.Contains('SetGuestPermissionsAsync') -or $xml.Contains('WatchPartyGuestPermissions')) { throw 'Guest player options must be administrator-only, not owner API commands.' }
 & $Dotnet build (Join-Path $Directory 'examples/WatchPartyConsumer/WatchPartyConsumer.csproj') -c Release
 if ($LASTEXITCODE -ne 0) { throw 'The portable SDK consumer example failed to build.' }
 if (-not (Test-Path (Join-Path $Directory 'examples/WatchPartyConsumer/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll'))) { throw 'Consumer did not copy its SDK DLL.' }

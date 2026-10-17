@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
@@ -29,7 +30,7 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
         lock (store.Gate)
         {
             store.Sweep(manager.Config);
-            var party = store.ForSession(session.Id);
+            var party = store.ForSession(session.Id, session.UserId);
             var canCreate = manager.Config.CanCreate(session.UserId, GroupMode.Public) || manager.Config.CanCreate(session.UserId, GroupMode.Private);
             return new { RealtimeReady = session.SessionControllers.Any(c => c.IsSessionActive),
                 DefaultMode = canCreate ? manager.Config.DefaultFor(session.UserId).ToString() : null,
@@ -68,7 +69,7 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
         var session = await Session();
         lock (store.Gate)
         {
-            var party = store.ForSession(session.Id) ?? throw new PartyException(404, "Join a party first.");
+            var party = store.ForSession(session.Id, session.UserId) ?? throw new PartyException(404, "Join a party first.");
             var invite = store.Issue(party, session.UserId, request.AllowGuests, request.MaxUses, request.ExpiresAt, manager.Config);
             return new { invite.Value.Id, invite.Token };
         }
@@ -79,7 +80,7 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
         var session = await Session();
         lock (store.Gate)
         {
-            var party = store.ForSession(session.Id) ?? throw new PartyException(404, "Party not found.");
+            var party = store.ForSession(session.Id, session.UserId) ?? throw new PartyException(404, "Party not found.");
             if (party.Owner != session.UserId) throw new PartyException(403, "Only the owner may revoke invitations.");
             store.Revoke(party, id);
         }
@@ -97,9 +98,8 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
                 CanControlPlayback = a.EffectivePermissions.ControlPlayback, CanEditQueue = a.EffectivePermissions.EditQueue,
                 PlaybackAllowed = a.Permissions.ControlPlayback, QueueAllowed = a.Permissions.EditQueue }).ToList();
             participants.AddRange(snapshot.Guests.Select(g => (object)new { Id = g.ParticipantId, g.Name, Kind = "guest", Sessions = 1, IsOwner = false,
-                GuestFeatures = g.EffectiveFeatures, InheritsGuestFeatures = g.Permissions.Features is null, SharedInviteViewers = g.SharedInviteGuestCount }));
-            return new { party.Id, party.Capacity, Policy = party.Policy with { GuestFeatures = snapshot.EffectiveGuestFeatures.ToArray() },
-                AllowedGuestFeatures = snapshot.AllowedGuestFeatures, Participants = participants,
+                SharedInviteViewers = g.SharedInviteGuestCount }));
+            return new { party.Id, party.Capacity, Policy = party.Policy, Participants = participants,
                 Blocked = snapshot.BlockedAccounts.Select(a => new { Id = a.ParticipantId, a.Name }).ToArray() };
         }
     }
@@ -107,7 +107,7 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
     public async Task<IActionResult> Policy(Guid id, PartyPolicyRequest request)
     {
         manager.UpdatePolicy(await Session(), id, new(request.AllowJoins!.Value, request.AllowGuests!.Value,
-            request.ParticipantsControlPlayback!.Value, request.ParticipantsEditQueue!.Value, request.GuestFeatures), request.MaxViewers!.Value);
+            request.ParticipantsControlPlayback!.Value, request.ParticipantsEditQueue!.Value), request.MaxViewers!.Value);
         return NoContent();
     }
     [HttpPost("Groups/{id:guid}/Participants/{participant:guid}/Permissions")]
@@ -119,8 +119,7 @@ public sealed class PartyController(PrivateSyncPlayManager manager, PartyStore s
             if (!request.ControlPlayback.HasValue || !request.EditQueue.HasValue) throw new PartyException(400, "Both account permissions are required.");
             manager.SetAccountPermissions(actor, id, participant, request.ControlPlayback.Value, request.EditQueue.Value);
         }
-        else if (request.Kind == "guest") manager.SetGuestPermissions(actor, id, participant, request.GuestFeatures);
-        else throw new PartyException(400, "Unknown participant kind.");
+        else throw new PartyException(400, "Only account playback and queue permissions can be changed here. Guest player options are administrator-only.");
         return NoContent();
     }
     [HttpDelete("Groups/{id:guid}/Participants/{participant:guid}")]
@@ -148,7 +147,8 @@ public sealed record CreateRequest([Required, StringLength(200, MinimumLength = 
 public sealed record CodeRequest([Required, StringLength(8, MinimumLength = 6)] string Code);
 public sealed record TokenRequest([Required, StringLength(64, MinimumLength = 64)] string Token);
 public sealed record InviteRequest(bool AllowGuests, int MaxUses, DateTimeOffset? ExpiresAt);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record PartyPolicyRequest([Required] bool? AllowJoins, [Required] bool? AllowGuests,
-    [Required] bool? ParticipantsControlPlayback, [Required] bool? ParticipantsEditQueue, [Required, Range(1, 1000)] int? MaxViewers,
-    [MaxLength(6)] string[]? GuestFeatures);
-public sealed record ParticipantPermissionRequest([Required] string Kind, bool? ControlPlayback, bool? EditQueue, [MaxLength(6)] string[]? GuestFeatures);
+    [Required] bool? ParticipantsControlPlayback, [Required] bool? ParticipantsEditQueue, [Required, Range(1, 1000)] int? MaxViewers);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ParticipantPermissionRequest([Required] string Kind, bool? ControlPlayback, bool? EditQueue);

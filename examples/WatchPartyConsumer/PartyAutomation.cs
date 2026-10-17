@@ -18,6 +18,4 @@ public sealed class PartyAutomation(IWatchPartyService parties)
             state.Policy with { ParticipantsControlPlayback = false, ParticipantsEditQueue = false }, token);
     }
 
-    public Task RestoreGuestDefaultsAsync(Guid authenticatedOwner, string existingSession, Guid partyId, Guid guestParticipantId, CancellationToken token = default)
-        => parties.SetGuestPermissionsAsync(authenticatedOwner, existingSession, partyId, guestParticipantId, new WatchPartyGuestPermissions(), token);
 }

@@ -115,6 +115,7 @@
             const size = UI.select('Preview viewport', ['Fit canvas','Wide player','Narrow player'], 'Fit canvas', canvas, 'pspPlayerViewport');
             const viewport = UI.element('div', null, canvas, 'privateSyncPlayPreviewViewport');
             frame = UI.element('iframe', null, viewport, 'privateSyncPlayPlayerPreview'); frame.title = 'Live isolated guest player preview';
+            UI.element('p', 'Fit canvas follows the available settings-page width automatically. Fixed wide/narrow viewports scroll inside the canvas without widening the page.', canvas, 'fieldDescription');
             size.onchange = () => { frame.style.inlineSize = size.value === 'Wide player' ? '64em' : size.value === 'Narrow player' ? '24em' : '100%'; };
             frame.setAttribute('sandbox','allow-scripts'); frame.setAttribute('allow','autoplay; fullscreen'); frame.setAttribute('allowfullscreen','');
             frame.onload = connect; frame.src = ApiClient.getUrl('PrivateSyncPlay/PlayerPreview');

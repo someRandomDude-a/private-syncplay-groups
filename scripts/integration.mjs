@@ -28,6 +28,7 @@ function command(exe, args) {
     return result.stdout.trim();
 }
 const docker = (...args) => command('docker', args);
+const guestEncoders = () => docker('top',name,'-eo','pid,args').split('\n').filter(line=>line.includes('-hls_segment_filename segment%09d.ts')).length;
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const normalize = x => Array.isArray(x) ? x.map(normalize) : x && typeof x === 'object'
     ? Object.fromEntries(Object.entries(x).map(([k,v]) => [k[0].toLowerCase()+k.slice(1), normalize(v)])) : x;
@@ -246,8 +247,12 @@ try {
     }
     assert(controlStyles.includes('.emby-checkbox') && controlStyles.includes('.formDialog') && controlStyles.includes('.mdl-slider'),'Native control CSS chunks missing');
     const watch=(await request('PrivateSyncPlay/Watch')).data;
-    assert(watch.includes('../Branding/Css') && watch.includes('themes/dark/theme.css') && !watch.includes('<style>'),'Guest player must reuse native theme/branding');
-    assert(watch.includes('videoOsdBottom') && watch.includes('buttonMute') && watch.includes('btnSubtitles') && !watch.includes('btnPause'),'Guest controls must use native player hooks without party transport controls');
+    assert(watch.includes('assets/watch-entry.js') && watch.includes('hidden disabled') && !watch.includes('assets/guest.js'),'Invitation landing must check account/admission before offering guests');
+    await request('PrivateSyncPlay/assets/watch-entry.js');
+    const player=(await request('PrivateSyncPlay/Player')).data;
+    assert(player.includes('../Branding/Css') && player.includes('themes/dark/theme.css') && !player.includes('<style>'),'Guest player must reuse native theme/branding');
+    assert(player.includes('videoOsdBottom') && player.includes('buttonMute') && player.includes('btnSubtitles') && !player.includes('btnPause'),'Guest controls must use native player hooks without party transport controls');
+    assert(!player.includes('watch-entry.js') && !player.includes('id="signin"'),'Guest runtime must not load account authentication');
     const account=(await request('PrivateSyncPlay/Account')).data;
     assert(account.includes('assets/account.js') && !account.includes('privateSyncPlayInvite='));
     console.log('PASS plugin loaded, configuration and bundled web assets');
@@ -261,11 +266,18 @@ try {
     console.log('PASS private list/detail/direct-join guards and join code');
     const accountOnly = (await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:false,MaxUses:1}})).data;
     const invite = (await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:2}})).data;
+    assert.equal((await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:accountOnly.token},origin:true})).data.allowGuests,false);
+    assert.equal((await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:invite.token},origin:true})).data.allowGuests,false,'HTTP cannot offer guest admission');
     base = `https://127.0.0.1:${tlsPort}`;
+    assert.equal((await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:accountOnly.token},origin:true})).data.allowGuests,false);
+    for(let i=0;i<3;i++)assert.equal((await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:invite.token},origin:true})).data.allowGuests,true,'Preflight cannot consume invite uses or seats');
+    await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:invite.token},extraHeaders:{Origin:'https://evil.example'},expected:403});
     await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:accountOnly.token},origin:true,expected:403});
     const redeem = await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:invite.token},guest:true,origin:true,expected:204});
     cookie = redeem.headers['set-cookie'][0].split(';')[0];
     assert.match(redeem.headers['set-cookie'][0],/httponly/i);
+    assert.equal((await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:invite.token},origin:true})).data.allowGuests,false,'Full party must hide new guest admission');
+    assert.equal((await request('PrivateSyncPlay/Guest/Options',{method:'POST',body:{Token:invite.token},origin:true,guest:true})).data.allowGuests,true,'An existing lease may reconnect without another seat');
     await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:invite.token},origin:true,expected:409});
     await request('PrivateSyncPlay/Guest/State',{guest:true});
     await request('Users/Me',{guest:true,expected:401});
@@ -328,11 +340,61 @@ try {
     assert(seekCaptions.includes('00:01:00'),'Text delivery preserves movie timestamps for the player offset adjustment');
     await progress(0,-1); state=await readyGuest();
     console.log('PASS embedded/external text subtitles, native styled burn-in, seek offsets and scoped subtitle guards');
+    // Create real member-owned HLS, then borrow it without forwarding its URLs/tokens or starting another encoder.
+    const nativePlaySession='native-party-'+Date.now();
+    const nativeQuery=new URLSearchParams({mediaSourceId:itemDetails.mediaSources[0].id,playSessionId:nativePlaySession,deviceId:admin.device,
+        videoCodec:'h264',audioCodec:'aac',container:'ts',segmentContainer:'ts',segmentLength:'2',minSegments:'1',videoBitRate:'2000000',
+        audioBitRate:'128000',maxAudioChannels:'2',maxVideoBitDepth:'8',subtitleStreamIndex:'-1'});
+    const nativeVariantPath=`Videos/${item.id}/main.m3u8?${nativeQuery}`;
+    const nativeVariant=(await request(nativeVariantPath,{auth:admin})).data;
+    const memberSegment=nativeVariant.split('\n').map(line=>line.trim()).find(line=>line && !line.startsWith('#'));assert(memberSegment);
+    await request(new URL(memberSegment,new URL(nativeVariantPath,base+'/')).href,{auth:admin});
+    await request('Sessions/Playing',{method:'POST',auth:admin,body:{ItemId:item.id,MediaSourceId:itemDetails.mediaSources[0].id,
+        PlaySessionId:nativePlaySession,PositionTicks:0,IsPaused:false,CanSeek:true,PlayMethod:'Transcode',SubtitleStreamIndex:-1},expected:204});
+    try {
+        for(let i=0;i<15;i++) {state=(await request('PrivateSyncPlay/Guest/State',{guest:true})).data;if(state.playbackMethod==='Shared')break;await wait(500);}
+        assert.equal(state.playbackMethod,'Shared','Compatible native party HLS should be borrowed before launching another encoder');
+        assert.equal(guestEncoders(),0,'Borrowing native HLS must stop the redundant guest encoder');
+        const sharedManifest=(await request(`PrivateSyncPlay/Guest/media/${state.generation}/index.m3u8`,{guest:true})).data;
+        assert(!sharedManifest.includes(nativePlaySession) && !sharedManifest.includes('api_key') && !sharedManifest.includes('/Videos/'));
+        const nativeSegment=sharedManifest.split('\n').find(line=>line.startsWith('segment'));assert(nativeSegment);
+        assert((await request(`PrivateSyncPlay/Guest/media/${state.generation}/${nativeSegment}`,{guest:true})).bytes.length>188);
+        const nativePids=docker('top',name,'-eo','pid,args').split('\n').filter(line=>line.includes('ffmpeg') && line.includes('-hls_segment_filename')).map(line=>line.trim().split(/\s+/)[0]);
+        await request('PrivateSyncPlay/Guest/Leave',{method:'POST',guest:true,origin:true,body:{},expected:204});
+        const afterLeave=docker('top',name,'-eo','pid,args');assert(nativePids.every(pid=>afterLeave.split('\n').some(line=>line.trim().startsWith(pid+' '))),'Guest cleanup must never kill a member-owned encoder');
+        const link=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:2}})).data;
+        const admission=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:link.token},origin:true,expected:204});cookie=admission.headers['set-cookie'][0].split(';')[0];
+        assert.equal((await request('PrivateSyncPlay/Guest/State',{guest:true})).data.playbackMethod,'Shared');
+    } finally {
+        await request(`Videos/ActiveEncodings?deviceId=${admin.device}&playSessionId=${nativePlaySession}`,{method:'DELETE',auth:admin,expected:204});
+    }
+    state=await readyGuest();assert.equal(state.playbackMethod,'Remux','Native stream ending must fall back without resurrecting it');
+    console.log('PASS native member HLS reuse, credential-free manifests, no duplicate encoder, safe detach and isolated fallback');
+
+    // Both guests receive one target chosen for the slower connection; telemetry cannot change playback or the administrator cap.
+    await request(`PrivateSyncPlay/Groups/${group.groupId}/Policy`,{method:'POST',auth:admin,body:{AllowJoins:true,AllowGuests:true,ParticipantsControlPlayback:true,ParticipantsEditQueue:true,MaxViewers:4},expected:204});
+    const fastCookie=cookie;
+    const slowLink=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:1}})).data;
+    const slowAdmission=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:slowLink.token},origin:true,expected:204});const slowCookie=slowAdmission.headers['set-cookie'][0].split(';')[0];
+    await wait(5100);
+    await request(`PrivateSyncPlay/Guest/State?generation=${state.generation}&bandwidthKbps=100000&bufferSeconds=10`,{guest:true});
+    cookie=slowCookie;
+    const reduced=(await request(`PrivateSyncPlay/Guest/State?generation=${state.generation}&bandwidthKbps=1000&bufferSeconds=1&stalled=true`,{guest:true})).data;
+    assert(reduced.videoBitrateKbps<=512 && reduced.videoBitrateKbps<=settings.guestVideoBitrateKbps);
+    cookie=fastCookie;const common=(await request('PrivateSyncPlay/Guest/State',{guest:true})).data;
+    assert.equal(common.generation,reduced.generation);assert.equal(common.videoBitrateKbps,reduced.videoBitrateKbps);assert.equal(guestEncoders(),1);
+    cookie=slowCookie;await request('PrivateSyncPlay/Guest/Leave',{method:'POST',guest:true,origin:true,body:{},expected:204});assert.equal(guestEncoders(),1);
+    cookie=fastCookie;await request('PrivateSyncPlay/Guest/Leave',{method:'POST',guest:true,origin:true,body:{},expected:204});assert.equal(guestEncoders(),0);
+    const freshLink=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:1}})).data;
+    const freshGuest=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:freshLink.token},origin:true,expected:204});cookie=freshGuest.headers['set-cookie'][0].split(';')[0];
+    state=await readyGuest();assert.equal(state.videoBitrateKbps,settings.guestVideoBitrateKbps);
+    console.log('PASS shared worst-guest adaptive bitrate, hard administrator video ceiling and zero-guest shutdown');
     const designerCatalog=(await request('PrivateSyncPlay/PlayerDesigner/Catalog',{auth:admin})).data;
     assert(!designerCatalog.features.includes('pause') && !designerCatalog.features.includes('seek'));
     if(withConsumer) assert(designerCatalog.controls.some(c=>c.id==='example.captions'),'Cross-load-context declarative UI contribution must be discoverable');
     await request('PrivateSyncPlay/PlayerDesigner/Catalog',{guest:true,expected:401});
     await request('PrivateSyncPlay/PlayerDesigner/Catalog',{auth:friend,expected:403});
+    await request(settingsPath,{method:'POST',auth:friend,body:settings,expected:403});
     const previousPlayer=structuredClone(settings.guestPlayer);
     settings.guestPlayer={features:['volume'],controls:['volume','example.captions','unknown.control']};
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
@@ -362,7 +424,7 @@ try {
     await request(partyBase+'/Management',{auth:friend,expected:403});
     await request(partyBase+'/Management',{guest:true,expected:401});
     await request(partyBase,{method:'DELETE',auth:friend,expected:403});
-    const partyPolicy={AllowJoins:true,AllowGuests:true,ParticipantsControlPlayback:true,ParticipantsEditQueue:true,MaxViewers:5,GuestFeatures:management.allowedGuestFeatures};
+    const partyPolicy={AllowJoins:true,AllowGuests:true,ParticipantsControlPlayback:true,ParticipantsEditQueue:true,MaxViewers:5};
     await request(partyBase+'/Policy',{method:'POST',auth:friend,body:partyPolicy,expected:403});
     await request(partyBase+'/Policy',{method:'POST',auth:admin,body:partyPolicy,expected:204});
     await request(partyBase+`/Participants/${accountParticipant.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'account',ControlPlayback:false,EditQueue:false},expected:204});
@@ -371,12 +433,11 @@ try {
     await request('SyncPlay/SetNewQueue',{method:'POST',auth:friend,body:{PlayingQueue:[item.id],PlayingItemPosition:0,StartPositionTicks:0},expected:403});
     await request('SyncPlay/Buffering',{method:'POST',auth:friend,body:{When:new Date().toISOString(),PositionTicks:0,IsPlaying:false,PlaylistItemId:'00000000-0000-0000-0000-000000000000'},expected:204});
     await request('SyncPlay/Ready',{method:'POST',auth:friend,body:{When:new Date().toISOString(),PositionTicks:0,IsPlaying:false,PlaylistItemId:'00000000-0000-0000-0000-000000000000'},expected:204});
-    await request(partyBase+`/Participants/${primaryGuest.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'guest',GuestFeatures:['volume']},expected:204});
-    const narrowed=(await request('PrivateSyncPlay/Guest/State',{guest:true})).data;assert.deepEqual(narrowed.player.features,['volume']);
-    await request(`PrivateSyncPlay/Guest/media/${narrowed.generation}/subtitles/${state.subtitles[0].index}.vtt`,{guest:true,expected:403});
-    await request(partyBase+`/Participants/${primaryGuest.id}/Permissions`,{method:'POST',auth:friend,body:{Kind:'guest',GuestFeatures:null},expected:403});
-    await request(partyBase+`/Participants/${primaryGuest.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'guest',GuestFeatures:['pause']},expected:403});
-    await request(partyBase+`/Participants/${primaryGuest.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'guest',GuestFeatures:null},expected:204});
+    const administratorFeatures=(await request('PrivateSyncPlay/Guest/State',{guest:true})).data.player.features;
+    await request(partyBase+`/Participants/${primaryGuest.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'guest',GuestFeatures:['volume']},expected:400});
+    await request(partyBase+`/Participants/${primaryGuest.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'guest'},expected:400});
+    await request(partyBase+'/Policy',{method:'POST',auth:admin,body:{...partyPolicy,GuestFeatures:['volume']},expected:400});
+    assert.deepEqual((await request('PrivateSyncPlay/Guest/State',{guest:true})).data.player.features,administratorFeatures,'Owners must not override administrator guest options');
     const originalGuestCookie=cookie;
     const shared=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:2}})).data;
     const extraCookies=[];
@@ -403,7 +464,7 @@ try {
     assert.equal((await request('PrivateSyncPlay/Me',{auth:friend})).data.party.canControlPlayback,false,'Rejoining must not reset account permissions');
     await request(partyBase+`/Participants/${accountParticipant.id}/Permissions`,{method:'POST',auth:admin,body:{Kind:'account',ControlPlayback:true,EditQueue:true},expected:204});
     state=await readyGuest();
-    console.log('PASS real owner moderation, native request guards, guest permission narrowing, shared-link kicks, account blocks/unblocks and locked joining');
+    console.log('PASS real owner moderation, native request guards, administrator-only guest options, shared-link kicks, account blocks/unblocks and locked joining');
     const ownerPolicy=(await request(`Users/${admin.user.id}`,{auth:admin})).data.policy;
     const originalVideoPermission=ownerPolicy.enableVideoPlaybackTranscoding;
     const originalAudioPermission=ownerPolicy.enableAudioPlaybackTranscoding;
@@ -435,6 +496,16 @@ try {
     const convertedBytes=await request(`PrivateSyncPlay/Guest/media/${converted.generation}/${convertedSegment}`,{guest:true});
     assert(convertedBytes.bytes.length>188);
     console.log('PASS required bitrate conversion using native Jellyfin encoding settings');
+    assert.equal(guestEncoders(),1,'One shared guest encoder must be running');
+    await request('PrivateSyncPlay/Guest/Leave',{method:'POST',guest:true,origin:true,body:{},expected:204});
+    assert.equal(guestEncoders(),0,'Last guest leaving must terminate FFmpeg before the response returns');
+    await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
+    const restartInvite=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:2}})).data;
+    const restartGuest=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:restartInvite.token},origin:true,expected:204});
+    cookie=restartGuest.headers['set-cookie'][0].split(';')[0];
+    converted=await readyGuest();
+    assert.equal(converted.playbackMethod,'Transcode'); assert.equal(guestEncoders(),1);
+    console.log('PASS final guest leaving immediately terminates the real shared transcoder; a new admission can restart it');
     // Inject an actual encoder launch failure only inside this disposable container.
     const ffmpeg='/usr/lib/jellyfin-ffmpeg/ffmpeg';
     docker('exec',name,'mv',ffmpeg,ffmpeg+'.psp-test-disabled');
@@ -468,7 +539,7 @@ try {
     await request('SyncPlay/Unpause',{method:'POST',auth:friend,expected:204});
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:503});
     const overflowBase=`PrivateSyncPlay/Groups/${overflowParty.groupId}`;
-    const overflowPolicy={AllowJoins:true,AllowGuests:false,ParticipantsControlPlayback:true,ParticipantsEditQueue:true,MaxViewers:3,GuestFeatures:null};
+    const overflowPolicy={AllowJoins:true,AllowGuests:false,ParticipantsControlPlayback:true,ParticipantsEditQueue:true,MaxViewers:3};
     await request(overflowBase+'/Policy',{method:'POST',auth:friend,body:overflowPolicy,expected:204});
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
     overflowPolicy.AllowGuests=true;
@@ -480,16 +551,19 @@ try {
     await request('PrivateSyncPlay/Guest/State',{guest:true});
     await request('PrivateSyncPlay/JoinCode',{method:'POST',auth:friend,body:{Code:me.party.code},expected:204});
     console.log('PASS server-wide guest encoder cap without disrupting an existing stream');
-    // Master disable must invalidate the active lease permanently.
+    // Master disable must invalidate active leases AND existing guest invitations permanently.
     settings.enableGuestInvites=false;
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
+    assert.equal(guestEncoders(),0,'Administrative guest revocation must stop the shared encoder');
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
     await request(`PrivateSyncPlay/Guest/media/${state.generation}/subtitles/${state.subtitles[0].index}.vtt`,{guest:true,expected:401});
     settings.enableGuestInvites=true;
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
     cookie=undefined;
-    const next=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:invite.token},guest:true,origin:true,expected:204});
+    await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:invite.token},origin:true,expected:404});
+    const restoredInvite=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:2}})).data;
+    const next=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:restoredInvite.token},origin:true,expected:204});
     cookie=next.headers['set-cookie'][0].split(';')[0];
     settings.users=[{userId:admin.user.id,guestInvites:'Deny'}];
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
@@ -498,6 +572,7 @@ try {
     settings.users=[];
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
     await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
+    await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:restoredInvite.token},origin:true,expected:404});
     const lastInvite=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:admin,body:{AllowGuests:true,MaxUses:1}})).data;
     cookie=undefined;
     const last=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:lastInvite.token},origin:true,expected:204});
@@ -541,10 +616,8 @@ try {
         const account=snapshot.accounts.find(a=>!a.isOwner);assert(account);
         await request(`WatchPartyExample/Accounts/${account.participantId}/Permissions`,{method:'POST',auth:admin,body:{ControlPlayback:false,EditQueue:false},expected:204});
         await request('SyncPlay/Pause',{method:'POST',auth:friend,expected:403});
-        await request(`WatchPartyExample/Guests/${initialGuest.participantId}/Permissions`,{method:'POST',auth:admin,body:{Features:['volume']},expected:204});
-        assert.deepEqual((await request('PrivateSyncPlay/Guest/State',{guest:true})).data.player.features,['volume']);
-        await request(`WatchPartyExample/Guests/${initialGuest.participantId}/Permissions`,{method:'POST',auth:friend,body:{Features:null},expected:403});
-        await request(`WatchPartyExample/Guests/${initialGuest.participantId}/Permissions`,{method:'POST',auth:admin,body:{Features:null},expected:204});
+        await request(`WatchPartyExample/Guests/${initialGuest.participantId}/Permissions`,{method:'POST',auth:admin,body:{Features:['volume']},expected:404});
+        assert.deepEqual((await request('PrivateSyncPlay/Guest/State',{guest:true})).data.player.features,snapshot.guestFeatures);
         const ownerPolicy={...snapshot.policy,maxViewers:5,allowJoins:false};
         await request('WatchPartyExample/Policy',{method:'POST',auth:admin,body:ownerPolicy,expected:204});
         assert.equal((await request('WatchPartyExample/Management',{auth:admin})).data.management.policy.allowJoins,false);
@@ -578,7 +651,16 @@ try {
         assert.equal((await request('PrivateSyncPlay/Me',{auth:admin})).data.party ?? null,null,'Denied invitation must not leave a new party behind');
         console.log('PASS isolated consumer .NET API for parties, owner policy/permissions, type-safe removals, unblock, link revocation and no permission bypass');
     }
-    await writeFile(join(root,'result.json'), JSON.stringify({passed:true,base,container:name},null,2));
+    // Stop cleanly before inspecting SQLite. Never open/repair a live or existing server database.
+    docker('stop','--time','30',name);
+    const databaseChecks = await readFile(new URL('./check-database.py',import.meta.url),'utf8');
+    console.log(docker('run','--rm','--network','none','--read-only','--tmpfs','/tmp:rw,noexec,nosuid,size=256m',
+        '-v',`${join(root,'config')}:/config:ro`,'python:3.13-alpine','python3','-c',databaseChecks,'/config'));
+    if(keep) {
+        docker('start',name);
+        base=`https://127.0.0.1:${docker('port',name,'8920/tcp').split(':').at(-1)}`;
+    }
+    await writeFile(join(root,'result.json'), JSON.stringify({passed:true,databaseIntegrity:true,base,container:name},null,2));
     console.log('ALL INTEGRATION CHECKS PASSED');
 } catch(error) {
     if(started) {

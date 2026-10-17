@@ -59,17 +59,11 @@
         const control = UI.field('Allow participants to control playback', 'checkbox', data.policy.participantsControlPlayback, content);
         const queue = UI.field('Allow participants to edit the queue (requires playback control)', 'checkbox', data.policy.participantsEditQueue, content);
         const capacity = UI.field('Party viewer limit', 'number', data.capacity, content); capacity.min = 1; capacity.max = me.maxViewers; capacity.required = true;
-        UI.element('h4', 'Allowed guest features', content, 'sectionTitle');
-        description('Guest features can only be restricted, never expanded beyond the administrator’s allowlist. Volume and fullscreen are local browser options; caption access is checked server-side.', content);
-        const names = { title:'Video title', position:'Read-only position', volume:'Local volume', mute:'Mute', subtitles:'Text subtitles', fullscreen:'Fullscreen' };
-        const featureInputs = (parent, allowed, enabled, prefix) => allowed.map(feature => ({ feature,
-            input:UI.field(names[feature] || feature, 'checkbox', enabled.includes(feature), parent, prefix + '-' + feature) }));
-        const partyFeatures = featureInputs(content, data.allowedGuestFeatures, data.policy.guestFeatures, 'pspPartyFeature');
+        description('Guest player options are configured by the server administrator and apply equally to all guests. Party owners manage admission and removal, not guest player features.', content);
         action('Save party permissions', content, async () => {
             if (!capacity.reportValidity()) return;
             const save = async () => { await request(base + '/Policy', 'POST', { AllowJoins:joins.checked, AllowGuests:guests.checked,
-                ParticipantsControlPlayback:control.checked, ParticipantsEditQueue:queue.checked, MaxViewers:Number(capacity.value),
-                GuestFeatures:partyFeatures.filter(f => f.input.checked).map(f => f.feature) }); await show(); };
+                ParticipantsControlPlayback:control.checked, ParticipantsEditQueue:queue.checked, MaxViewers:Number(capacity.value) }); await show(); };
             if (data.policy.allowGuests && !guests.checked) confirm('Disable guest access?', 'All current guests will be disconnected and their guest-enabled invitation links revoked. Re-enabling access will not restore those sessions or links.', save);
             else await save();
         }, 'primary', 'save-party-permissions');
@@ -97,10 +91,7 @@
                 action('Save permissions', actions, async () => { await request(path + '/Permissions', 'POST', {Kind:'account',ControlPlayback:playback.checked,EditQueue:edits.checked}); await show(); }, 'default', 'save-member-permissions');
                 action('Kick and block', actions, () => confirm('Remove ' + p.name + '?', 'All of this account’s devices will leave the party and be blocked from rejoining it by code, invitation or the public list. This does not ban their Jellyfin account.', async () => { await request(path, 'DELETE'); await show(); }), 'delete', 'kick-member');
             } else {
-                const checks = featureInputs(permissions, data.allowedGuestFeatures, p.guestFeatures, 'pspGuest-' + p.id);
-                checks.forEach(f => f.input.disabled = !data.policy.guestFeatures.includes(f.feature));
-                action('Save permissions', actions, async () => { await request(path + '/Permissions', 'POST', {Kind:'guest',GuestFeatures:checks.filter(f => f.input.checked && !f.input.disabled).map(f => f.feature)}); await show(); }, 'default', 'save-guest-permissions');
-                action('Use party defaults', actions, async () => { await request(path + '/Permissions', 'POST', {Kind:'guest',GuestFeatures:null}); await show(); });
+                description('Guest player options: administrator-managed', permissions);
                 action('Kick and revoke link', actions, () => confirm('Remove this guest?', `The guest’s invitation will be revoked. ${p.sharedInviteViewers} guest session(s) using that same link will be disconnected, and the link can no longer admit anyone. Anonymous people cannot be identified across new browsers or new invitations.`, async () => { await request(path, 'DELETE'); await show(); }), 'delete', 'kick-guest');
             }
         }
