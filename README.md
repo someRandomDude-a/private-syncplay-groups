@@ -15,24 +15,58 @@ Native .NET 10 plugin with private SyncPlay groups, limited invite links, admini
 - **Guests never keep a party alive.** The last signed-in participant leaving or disconnecting destroys all party invitations and guest leases. Another signed-in member may keep the party alive after its creator leaves.
 - State is in memory: restarting Jellyfin expires groups, links and guests. Disabling private creation does not publish existing private groups.
 
-## Build and install
+## Install from Jellyfin's plugin catalog
+
+Once the first tagged release has been published, add this stable repository URL:
+
+```text
+https://github.com/someRandomDude-a/private-syncplay-groups/releases/latest/download/manifest.json
+```
+
+1. Open **Dashboard → Plugins → Repositories** (or **Manage Repositories**).
+2. Add a repository named **Private SyncPlay** using the URL above, then save.
+3. Refresh the **Catalog**, select **Private SyncPlay**, and install the compatible Jellyfin 12 version.
+4. **Restart Jellyfin**, then configure **Dashboard → Plugins → Private SyncPlay**.
+
+The release catalog contains real ZIP checksums and preserves previous published versions for Jellyfin's compatibility selection. GitHub release assets must be publicly accessible to your server. The repository URL will return 404 until a maintainer publishes the first release; adding a workflow does not publish it automatically.
+
+For manual installation, download **`PrivateSyncPlay-X.Y.Z.zip`** from [GitHub Releases](https://github.com/someRandomDude-a/private-syncplay-groups/releases), extract it into a `PrivateSyncPlay` folder inside Jellyfin's plugins directory, and restart. Keep **both** `Jellyfin.Plugin.PrivateSyncPlay.dll` and `Jellyfin.Plugin.PrivateSyncPlay.Api.dll` together. The separate `PrivateSyncPlay.Api-1.0.0.zip` asset is a developer SDK, not a Jellyfin catalog plugin.
+
+## Build from source
 
 Requires the **.NET 10 SDK**, Node.js 22+, and npm. No other Jellyfin plugins are required.
 
 ```powershell
 npm ci --ignore-scripts
 npm run check
+npm run test:ui
 dotnet test tests/Jellyfin.Plugin.PrivateSyncPlay.Tests -c Release
 ./scripts/package.ps1
 ```
 
-Extract `artifacts/PrivateSyncPlay-0.1.0.zip` into a new `PrivateSyncPlay` subdirectory inside Jellyfin's plugins directory, then restart Jellyfin. Do not copy the SDK or Jellyfin assemblies into that directory. The package embeds its web scripts and hls.js, whose license is included.
+Extract `artifacts/PrivateSyncPlay-0.1.0.zip` into a new `PrivateSyncPlay` subdirectory inside Jellyfin's plugins directory, keeping both packaged DLLs together, then restart Jellyfin. Do not install the separate developer SDK archive as a plugin or copy Jellyfin server assemblies into that directory. The package embeds its web scripts and hls.js, whose license is included.
 
-Configure **Dashboard → Plugins → Private SyncPlay**. Use the **Watch parties** launcher in Jellyfin Web to create a party, select its mode and concurrent-viewer cap, join by code, and manage invitations. The usual SyncPlay controls continue to handle signed-in playback.
+Configure **Dashboard → Plugins → Private SyncPlay**. Use the **Watch parties** toolbar button in Jellyfin Web to create a party, select its mode and concurrent-viewer cap, join by code, and manage invitations. The usual SyncPlay controls continue to handle signed-in playback.
 
 Guest links must be created and opened over **HTTPS**. The web controls disable guest-link creation on an HTTP connection; account-only invitations remain available.
 
-`scripts/package.ps1` also generates a repository manifest using the ZIP's actual checksum. Its release URL is not usable until you publish the corresponding GitHub release asset and host the manifest. Nothing is published automatically.
+`scripts/package.ps1` generates `artifacts/manifest.json` using the exact ZIP's checksum and also packages the developer SDK. Root `manifest.json` contains catalog metadata with an empty version list, intentionally avoiding fabricated checksums or unpublished install entries. **Use the release catalog URL above, not the metadata template's raw URL**, in Jellyfin.
+
+### Publishing a release (maintainers)
+
+Commit the source changes, create a version tag such as `v0.1.0`, and push the tag. `.github/workflows/release.yml` verifies .NET/UI tests and a real Jellyfin Docker integration with a separate consumer plugin before publishing the plugin ZIP, SDK ZIP and installable manifest to that GitHub release. The stable `/releases/latest/download/manifest.json` URL then serves the new catalog. Existing release assets are not overwritten. Alternatively, run the release workflow manually with an **existing** `vX.Y.Z` tag.
+
+The workflow merges the previous published catalog; local packaging can do the same with `./scripts/package.ps1 -Version X.Y.Z -PreviousManifest path/to/previous-manifest.json`. Local packaging alone never creates a GitHub release. Nothing has been published by this coding session.
+
+### Native UI and skin compatibility
+
+Controls use Jellyfin 12's native DOM/CSS contracts: `emby-button`, `raised`, `button-submit`, `button-delete`, `inputContainer`/`emby-input`/`inputLabel`, `checkboxContainer`/`emby-checkbox`/`checkboxOutline`, `selectContainer`/`emby-select`, `dialog`/`formDialog`, `paperList`/`listItem`, and `mdl-slider`. Labels are associated with inputs, focus states follow native classes, and errors use themed in-page feedback instead of browser alerts.
+
+The launcher is placed in Jellyfin's toolbar and reuses its actual button classes, including the Modern layout's MUI skin hooks. There is no fixed-position floating button. Plugin CSS provides responsive layout and inherited defaults only, not a custom palette, font or button design. Existing themes, CSS variables and skin overrides own the appearance.
+
+The isolated guest player loads **stylesheets only** from the installed Jellyfin Web build, its configured default theme and public server branding CSS. It never loads the normal web application or its authentication code. Guests cannot inherit another user's private client preferences; server-wide skins apply through **Dashboard → General → Custom CSS**. HTTPS stylesheet/font/image imports are permitted for administrator-installed skins; scripts, media access and API requests remain restricted. Only install trusted CSS, and never put account tokens or private media URLs in public branding CSS.
+
+Native skin selectors are supported, but arbitrary CSS that hides controls or completely replaces Jellyfin's DOM can still break them. Skins targeting only unrelated MUI components may need the same legacy control selectors used by ordinary Jellyfin plugin configuration pages. Test your chosen skin in Modern/Legacy layouts and at mobile sizes.
 
 ## Administrator settings
 
@@ -47,6 +81,7 @@ Guest links must be created and opened over **HTTPS**. The web controls disable 
 | Maximum invite uses | 10 | Hard upper bound on each link's chosen redemption count |
 | Guest reconnect grace | 30 seconds | Seats expire without a state heartbeat |
 | Guest video bitrate | 2000 kbps | Shared browser-stream video bitrate cap; audio target up to 128 kbps |
+| Maximum concurrent guest streams | 2 | Server-wide encoder/remux process limit (1–32); additional parties receive 503, not another encoder |
 
 Each user can inherit or restrict public/private creation, override the default creation mode, and inherit/allow/deny guest invitations. A per-user Allow cannot bypass a server master restriction. Hosts cannot edit these policies.
 
@@ -61,6 +96,16 @@ Guests receive an opaque HttpOnly, Secure, SameSite=Strict, path-scoped session 
 Guest endpoints expose only current playback state and a generated, sliding-window HLS stream. They never accept a source URL, library item ID, media path, or FFmpeg options from the guest. Every manifest and segment request checks the party, guest lease, owner sharing permission, current item, and owner library access. The player exposes local volume but no party controls; guests cannot send buffering/pause/seek/queue commands to SyncPlay.
 
 Guest playback uses **one shared HLS process per active guest party**, through Jellyfin's configured FFmpeg executable. It follows an authenticated participant's reported playback position; it does not add guest sessions to Jellyfin's core SyncPlay engine or pause members while guests buffer. Expect browser/network synchronization tolerance, not frame-accurate playback. Administrator guest permission is an explicit delegation to stream the party's current video to unauthenticated people. The owner must retain media playback and SyncPlay permissions, plus remuxing/audio/video conversion permissions **only for the operations actually required**.
+
+### Failure containment
+
+- Unsupported/conflicting SyncPlay registrations **disable this plugin**, log an administrator-facing error, and leave the existing server engine untouched. Plugin endpoints return **503** rather than creating unprotected parties. A later safety-check or maintenance failure revokes all plugin invitations/guest leases and latches the plugin unavailable until restart; it does not deliberately stop Jellyfin's host.
+- Revocation happens **before** native group/encoder cleanup. Failed cleanup cannot preserve a usable guest credential. If encoder termination cannot be confirmed, further plugin access is disabled rather than repeatedly spawning replacement processes. An administrator may need to stop an orphaned encoder at the OS/container level.
+- Encoder launch failures return generic errors without server paths and have a retry backoff. No failure switches guests to normal Jellyfin media URLs, issues account tokens, removes permission checks, or starts a hidden software fallback.
+- Guest polling/media requests are rate-limited; request bodies and media allocations are bounded. Guest processes have a separate server-wide cap (default **2**), including remux jobs; this does not replace OS resource limits or Jellyfin's signed-in transcoding controls.
+- Every guest delivery rechecks an eligible, connected signed-in member and the owner's permission. Cross-origin requests, including sibling-subdomain requests carrying a SameSite cookie, are rejected when browser origin/fetch metadata is present. Non-browser callers must still present the unguessable guest credential.
+
+See [security review and regression coverage](docs/security-review.md). These safeguards are not a guarantee against all crashes: plugins and FFmpeg run with the server's privileges. Keep Jellyfin/FFmpeg patched, use trusted plugins and media, run Jellyfin as an unprivileged user/container with read-only media and appropriate CPU/memory limits, and verify proxy behavior before Internet exposure. Jellyfin's existing public login, branding and server-info endpoints remain public even without this plugin.
 
 ### Encoding policy: follow Jellyfin
 
@@ -82,11 +127,19 @@ Ending a party or revoking access prevents further delivery and stops unused enc
 - Guest playback supports **local video files only**, using the first video/audio tracks. No guest subtitles, Live TV, remote/STRM sources or disc images in this preview.
 - Requires Jellyfin's FFmpeg build with the selected encoders, HLS and `readrate_initial_burst`. Remuxing has low overhead; required guest conversion is additional load, separate from signed-in transcoding.
 - Hardware encoder selection is covered by tests using Jellyfin's actual helpers and mocked hardware capabilities. Actual GPU execution and HDR tone mapping must still be verified on the administrator's hardware; Docker integration tests exercise real stream-copy and required software conversion on a CPU-only server.
-- Do not combine with plugins replacing `ISyncPlayManager`. Registration and startup checks fail rather than silently downgrade privacy.
+- Do not combine with plugins replacing `ISyncPlayManager`. Registration/startup checks disable this plugin rather than silently downgrade privacy or intentionally abort server startup.
 - One guest lease per browser cookie jar; reopening it resumes the same session during the grace period. Losing the cookie requires a new redemption.
 - Signed-in media restrictions remain enforced by Jellyfin. Enabling guest invitations is a deliberate admin decision to allow unauthenticated viewing of owner-authorized content.
 
 ## API
+
+### Internal API for other Jellyfin plugins
+
+Reference the versioned SDK and register `services.AddPrivateSyncPlayClient()` inside your `IPluginServiceRegistrator`. Then constructor-inject `IWatchPartyService` to create/query parties, generate invitation links on behalf of authenticated users, join, revoke, leave or end parties without HTTP calls. All operations retain user/session checks, native SyncPlay permissions, administrator guest restrictions, capacity limits and party lifetime rules.
+
+See **[plugin API documentation and complete examples](docs/plugin-api.md)**, including typed method signatures, XML/IntelliSense documentation, optional dependency handling and Jellyfin's isolated assembly load contexts. [`examples/WatchPartyConsumer`](examples/WatchPartyConsumer) is a separately compiled example plugin used in Docker integration tests; it is not shipped in the production plugin ZIP.
+
+### HTTP API
 
 Authenticated routes retain Jellyfin's SyncPlay authorization policies and resolve the caller's existing device session:
 

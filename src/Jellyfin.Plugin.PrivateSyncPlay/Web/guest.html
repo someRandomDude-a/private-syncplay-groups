@@ -1,12 +1,30 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Watch party</title>
-<style>body{color:#eee;background:#101116;font:17px system-ui;margin:0}main{max-width:1100px;margin:3rem auto;padding:1rem}video{width:100%;max-height:75vh;background:#000}button,a{font:inherit;padding:.7rem;color:#fff;background:#175b88;border:0;border-radius:5px;cursor:pointer}a{display:inline-block;text-decoration:none}#status{min-height:2em}label{margin:1rem}button:disabled{opacity:.5}</style>
-<script defer src="assets/hls.js"></script><script defer src="assets/guest.js"></script></head>
-<body><main><h1>Watch party</h1><p id="status" role="status">You have been invited to watch a party.</p>
-<p id="actions"><button id="join">Watch as guest</button> <a id="signin">Join with Jellyfin account</a></p>
-<video id="video" playsinline disablepictureinpicture controlslist="nodownload noremoteplayback"></video>
-<p><button id="play" hidden>Enable playback</button><label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="1"></label>
-<button id="leave" hidden>Leave party</button></p>
-<p>You can watch this party only. Playback is controlled by its signed-in members. Guest access ends with the party.</p>
+<html lang="en" dir="ltr" data-theme="{{THEME}}" class="layout-desktop">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Watch party</title>
+<link id="privateSyncPlayNativeCss" rel="stylesheet" href="assets/native.css">
+<!--JELLYFIN_THEME-->
+<link id="privateSyncPlayCss" rel="stylesheet" href="assets/ui.css">
+<link rel="stylesheet" href="../Branding/Css">
+<script defer src="assets/ui.js"></script><script defer src="assets/hls.js"></script><script defer src="assets/guest.js"></script>
+</head>
+<body dir="ltr" class="skinBody privateSyncPlayGuest">
+<main class="privateSyncPlayContent content-primary">
+<h1 class="sectionTitle">Watch party</h1>
+<p id="status" class="fieldDescription" role="status" aria-live="polite">You have been invited to watch a party.</p>
+<div id="actions" class="privateSyncPlayActions">
+<button is="emby-button" id="join" type="button" class="emby-button raised button-submit"><span>Watch as guest</span></button>
+<a is="emby-linkbutton" id="signin" class="emby-button raised"><span>Join with Jellyfin account</span></a>
+</div>
+<video id="video" class="privateSyncPlayVideo" playsinline disablepictureinpicture controlslist="nodownload noremoteplayback"></video>
+<div class="privateSyncPlayActions">
+<button is="emby-button" id="play" type="button" class="emby-button raised button-submit" hidden><span>Enable playback</span></button>
+<button is="emby-button" id="leave" type="button" class="emby-button raised" hidden><span>Leave party</span></button>
+</div>
+<div class="sliderContainer-settings"><label class="sliderLabel" for="volume">Volume</label>
+<div class="mdl-slider-container"><input is="emby-slider" data-embyslider="true" id="volume" class="mdl-slider mdl-js-slider mdl-slider-hoverthumb" type="range" min="0" max="1" step="0.05" value="1">
+<div class="mdl-slider-background-flex-container" aria-hidden="true"><div class="mdl-slider-background-flex"><div class="mdl-slider-background-flex-inner">
+<div class="mdl-slider-background-upper"></div><div id="volumeProgress" class="mdl-slider-background-lower"></div>
+</div></div></div></div></div>
+<p class="fieldDescription">You can watch this party only. Playback is controlled by its signed-in members. Guest access ends with the party.</p>
 </main></body></html>

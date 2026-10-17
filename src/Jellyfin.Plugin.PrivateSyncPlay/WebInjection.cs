@@ -5,14 +5,14 @@ using Microsoft.AspNetCore.Http;
 
 namespace Jellyfin.Plugin.PrivateSyncPlay;
 
-public sealed class WebInjection : IStartupFilter
+public sealed class WebInjection(PluginStatus? status = null) : IStartupFilter
 {
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
     {
         app.Use(async (context, continuation) =>
         {
             var path = context.Request.Path.Value ?? string.Empty;
-            if (!HttpMethods.IsGet(context.Request.Method) || !(path.EndsWith("/web/index.html", StringComparison.OrdinalIgnoreCase)
+            if (status?.IsAvailable == false || !HttpMethods.IsGet(context.Request.Method) || !(path.EndsWith("/web/index.html", StringComparison.OrdinalIgnoreCase)
                 || path.EndsWith("/web/", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/web", StringComparison.OrdinalIgnoreCase)))
             { await continuation(); return; }
             context.Request.Headers.Remove("Accept-Encoding");
@@ -21,7 +21,8 @@ public sealed class WebInjection : IStartupFilter
             using var buffer = new MemoryStream();
             context.Response.Body = buffer;
             try { await continuation(); } finally { context.Response.Body = original; }
-            if (context.Response.StatusCode != 200 || context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) != true)
+            if (context.Response.StatusCode != 200 || context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) != true
+                || !string.IsNullOrEmpty(context.Response.Headers.ContentEncoding))
             { buffer.Position = 0; await buffer.CopyToAsync(original); return; }
             var html = Encoding.UTF8.GetString(buffer.ToArray());
             // Relative to /web/; works with a configured Jellyfin base URL as well.

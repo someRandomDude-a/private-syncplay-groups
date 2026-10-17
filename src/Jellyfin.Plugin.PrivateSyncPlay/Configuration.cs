@@ -25,13 +25,14 @@ public sealed class Configuration : BasePluginConfiguration
     public int MaxInviteUses { get; set; } = 10;
     public int GuestLeaseSeconds { get; set; } = 30;
     public int GuestVideoBitrateKbps { get; set; } = 2000;
+    public int MaxGuestStreams { get; set; } = 2;
     public List<UserSettings> Users { get; set; } = [];
 
     public void Validate()
     {
         if (!Enum.IsDefined(DefaultMode) || MaxViewers is < 1 or > 1000 || MaxInviteUses is < 1 or > 10000
-            || GuestLeaseSeconds is < 10 or > 120 || GuestVideoBitrateKbps is < 256 or > 10000
-            || Users is null || Users.Select(x => x.UserId).Distinct().Count() != Users.Count
+            || GuestLeaseSeconds is < 10 or > 120 || GuestVideoBitrateKbps is < 256 or > 10000 || MaxGuestStreams is < 1 or > 32
+            || Users is null || Users.Any(x => x is null) || Users.Select(x => x.UserId).Distinct().Count() != Users.Count
             || Users.Any(x => x.UserId == Guid.Empty || !Enum.IsDefined(x.CreatePublic)
                 || !Enum.IsDefined(x.CreatePrivate) || !Enum.IsDefined(x.GuestInvites)
                 || (x.DefaultMode.HasValue && !Enum.IsDefined(x.DefaultMode.Value))))

@@ -32,8 +32,9 @@ public sealed class PartyStore(TimeProvider clock)
         return party;
     }
 
-    public Party ByCode(string code) => Parties.Values.FirstOrDefault(p => p.Mode == GroupMode.Private
-        && p.Code == code.Trim().ToUpperInvariant()) ?? throw new PartyException(404, "Invalid or expired invitation.");
+    public Party ByCode(string code) => !string.IsNullOrWhiteSpace(code) && code.Length <= 16 ? Parties.Values.FirstOrDefault(p => p.Mode == GroupMode.Private
+        && p.Code == code.Trim().ToUpperInvariant()) ?? throw new PartyException(404, "Invalid or expired invitation.")
+        : throw new PartyException(404, "Invalid or expired invitation.");
     public Party Require(Guid id) => Parties.GetValueOrDefault(id) ?? throw new PartyException(404, "Party not found.");
     public Party? ForSession(string session) => Parties.Values.FirstOrDefault(p => p.Members.Contains(session));
 
@@ -44,10 +45,13 @@ public sealed class PartyStore(TimeProvider clock)
         if (value.Count >= limit || _attempts.Count >= 10000) throw new PartyException(429, "Too many attempts. Try again later.");
         _attempts[key] = (value.Start, value.Count + 1);
     }
+    public void RateLimitGuest(string credential, string operation, int limit)
+        => RateLimit("guest-" + operation + ":" + Digest(credential), limit);
 
     public void CheckSeat(Party party, string? existingSession, Configuration config)
     {
         Sweep(config);
+        if (!Parties.TryGetValue(party.Id, out var current) || !ReferenceEquals(party, current)) throw new PartyException(404, "Party not found.");
         if (existingSession is not null && party.Members.Contains(existingSession)) return;
         var count = party.Members.Count + _guests.Values.Count(g => g.PartyId == party.Id);
         if (count >= Math.Min(party.Capacity, config.MaxViewers)) throw new PartyException(409, "This party is full.");
@@ -55,6 +59,8 @@ public sealed class PartyStore(TimeProvider clock)
 
     public (string Token, Invite Value) Issue(Party party, Guid user, bool guests, int uses, DateTimeOffset? expiry, Configuration config)
     {
+        Sweep(config);
+        if (!Parties.TryGetValue(party.Id, out var current) || !ReferenceEquals(party, current)) throw new PartyException(404, "Party not found.");
         if (party.Owner != user) throw new PartyException(403, "Only the party owner may create invitations.");
         if (guests && !config.CanInviteGuests(user)) throw new PartyException(403, "Guest invitations are disabled by your administrator.");
         if (uses < 1 || uses > config.MaxInviteUses || expiry <= Now) throw new PartyException(400, "Invalid invitation limits.");
@@ -68,7 +74,7 @@ public sealed class PartyStore(TimeProvider clock)
     public Invite ValidateInvite(string token, Configuration config, string? existingSession = null)
     {
         Sweep(config);
-        if (token.Length != 64 || !_invites.TryGetValue(Digest(token), out var invite)
+        if (token is null || token.Length != 64 || !_invites.TryGetValue(Digest(token), out var invite)
             || invite.ExpiresAt <= Now || !Parties.TryGetValue(invite.PartyId, out var party)
             || (invite.Uses >= Math.Min(invite.MaxUses, config.MaxInviteUses) && (existingSession is null || !party.Members.Contains(existingSession))))
             throw new PartyException(404, "Invalid or expired invitation.");
@@ -78,6 +84,7 @@ public sealed class PartyStore(TimeProvider clock)
     public string RedeemGuest(string token, string? existing, Configuration config)
     {
         Sweep(config);
+        if (token is null || token.Length != 64) throw new PartyException(404, "Invalid or expired invitation.");
         if (existing is not null && _guests.TryGetValue(Digest(existing), out var prior)
             && _invites.TryGetValue(Digest(token), out var same) && prior.InviteId == same.Id)
         { prior.LastSeen = Now; return existing; }
@@ -96,7 +103,7 @@ public sealed class PartyStore(TimeProvider clock)
     public Party GuestParty(string secret, Configuration config, bool heartbeat = false)
     {
         Sweep(config);
-        if (secret.Length != 64 || !_guests.TryGetValue(Digest(secret), out var guest)) throw new PartyException(401, "Guest session ended.");
+        if (secret is null || secret.Length != 64 || !_guests.TryGetValue(Digest(secret), out var guest)) throw new PartyException(401, "Guest session ended.");
         if (heartbeat) guest.LastSeen = Now;
         return Require(guest.PartyId);
     }

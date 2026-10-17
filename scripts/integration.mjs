@@ -8,7 +8,8 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
 
-const root = resolve(process.argv[2] || join(tmpdir(), 'opencode', 'private-syncplay-integration-' + Date.now()));
+const root = resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || join(tmpdir(), 'opencode', 'private-syncplay-integration-' + Date.now()));
+const withConsumer = process.argv.includes('--with-consumer');
 const resume = process.argv.find(x => x.startsWith('--resume='))?.slice(9);
 if (resume && !resume.startsWith('private-syncplay-integration-')) throw new Error('Refusing to reuse an unrelated container');
 const name = resume || 'private-syncplay-integration-' + process.pid;
@@ -27,9 +28,9 @@ const normalize = x => Array.isArray(x) ? x.map(normalize) : x && typeof x === '
 const pascal = x => Array.isArray(x) ? x.map(pascal) : x && typeof x === 'object'
     ? Object.fromEntries(Object.entries(x).map(([k,v]) => [k[0].toUpperCase()+k.slice(1), pascal(v)])) : x;
 let base, cookie;
-async function request(path, { method = 'GET', body, auth, guest = false, origin = false, expected = 200 } = {}) {
+async function request(path, { method = 'GET', body, auth, guest = false, origin = false, expected = 200, extraHeaders = {} } = {}) {
     const url = new URL(path.replace(/^\//, ''), base + '/');
-    const headers = {};
+    const headers = { ...extraHeaders };
     if (auth) headers.Authorization = `MediaBrowser Client="PSPIntegration", Device="Test", DeviceId="${auth.device}", Version="1.0", Token="${auth.token || ''}"`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (guest && cookie) headers.Cookie = cookie;
@@ -59,6 +60,12 @@ try {
     await mkdir(join(root, 'media'), { recursive: true });
     await mkdir(join(root, 'cache'), { recursive: true });
     await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.dll'));
+    await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay.Api/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.Api.dll'));
+    if (withConsumer) {
+        const folder=join(root,'config','plugins','WatchPartyConsumer'); await mkdir(folder,{recursive:true});
+        await copyFile('examples/WatchPartyConsumer/bin/Release/net10.0/WatchPartyConsumer.dll',join(folder,'WatchPartyConsumer.dll'));
+        await copyFile('examples/WatchPartyConsumer/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll',join(folder,'Jellyfin.Plugin.PrivateSyncPlay.Api.dll'));
+    }
     docker('run', '--rm', '-v', `${root}:/test`, '--entrypoint', '/usr/bin/openssl', image,
         'req', '-x509', '-newkey', 'rsa:2048', '-keyout', '/test/key.pem', '-out', '/test/cert.pem', '-days', '2', '-nodes', '-subj', '/CN=localhost');
     docker('run', '--rm', '-v', `${root}:/test`, '--entrypoint', '/usr/bin/openssl', image,
@@ -113,7 +120,17 @@ try {
     settings.guestVideoBitrateKbps = 10000; // Compatible fixture should remux, not encode.
     await request(settingsPath, {method:'POST',auth:admin,body:settings,expected:204});
     const shell = await request('web/index.html'); assert(shell.data.includes('PrivateSyncPlay/assets/web.js'), 'Web launcher injection missing');
-    await request('PrivateSyncPlay/assets/web.js'); await request('PrivateSyncPlay/assets/hls.js');
+    await request('PrivateSyncPlay/assets/web.js'); await request('PrivateSyncPlay/assets/hls.js'); await request('PrivateSyncPlay/assets/ui.js');
+    const nativeCss=(await request('PrivateSyncPlay/assets/native.css')).data;
+    assert(nativeCss.includes('main.jellyfin'),'Guest styles must reuse the installed Jellyfin CSS');
+    let controlStyles='';
+    for(const match of nativeCss.matchAll(/url\("([^"]+)"\)/g)) {
+        const url=new URL(match[1],new URL('PrivateSyncPlay/assets/native.css',base+'/'));
+        controlStyles+=(await request(url.href)).data;
+    }
+    assert(controlStyles.includes('.emby-checkbox') && controlStyles.includes('.formDialog') && controlStyles.includes('.mdl-slider'),'Native control CSS chunks missing');
+    const watch=(await request('PrivateSyncPlay/Watch')).data;
+    assert(watch.includes('../Branding/Css') && watch.includes('themes/dark/theme.css') && !watch.includes('<style>'),'Guest player must reuse native theme/branding');
     console.log('PASS plugin loaded, configuration and bundled web assets');
     const group = (await request('PrivateSyncPlay/Groups', { method:'POST', auth:admin, body:{Name:'Private Test',Mode:1,MaxViewers:3} })).data;
     const me = (await request('PrivateSyncPlay/Me',{auth:admin})).data;
@@ -135,6 +152,10 @@ try {
     await request('Users/Me',{guest:true,expected:401});
     await request('Items',{guest:true,expected:401});
     await request('SyncPlay/List',{guest:true,expected:401});
+    await request(`Items?api_key=${invite.token}`,{expected:401});
+    await request('PrivateSyncPlay/Guest/State',{guest:true,extraHeaders:{Origin:'https://evil.example'},expected:403});
+    await request('PrivateSyncPlay/Guest/State',{guest:true,extraHeaders:{'Sec-Fetch-Site':'same-site'},expected:403});
+    await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:null},origin:true,expected:400});
     console.log('PASS HTTPS guest lease and no normal API privileges');
     if (!(await request('Library/VirtualFolders',{auth:admin})).data.some(v=>v.name==='Integration'))
         await request('Library/VirtualFolders?name=Integration&collectionType=movies&refreshLibrary=true', {method:'POST',auth:admin,body:{LibraryOptions:{EnableInternetProviders:false,PathInfos:[{Path:'/media'}]}},expected:204});
@@ -191,6 +212,43 @@ try {
     const convertedBytes=await request(`PrivateSyncPlay/Guest/media/${converted.generation}/${convertedSegment}`,{guest:true});
     assert(convertedBytes.bytes.length>188);
     console.log('PASS required bitrate conversion using native Jellyfin encoding settings');
+    // Inject an actual encoder launch failure only inside this disposable container.
+    const ffmpeg='/usr/lib/jellyfin-ffmpeg/ffmpeg';
+    docker('exec',name,'mv',ffmpeg,ffmpeg+'.psp-test-disabled');
+    try {
+        settings.guestVideoBitrateKbps=300;
+        await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
+        const failed=await request('PrivateSyncPlay/Guest/State',{guest:true,expected:503});
+        assert(!JSON.stringify(failed.data).includes('/media/') && !JSON.stringify(failed.data).includes(ffmpeg),'Guest errors must not disclose server paths');
+        await request(`PrivateSyncPlay/Guest/media/${converted.generation}/index.m3u8`,{guest:true,expected:404});
+        await request('System/Info/Public'); await request('PrivateSyncPlay/Me',{auth:admin});
+        await request('Items',{guest:true,expected:401});
+    } finally { docker('exec',name,'mv',ffmpeg+'.psp-test-disabled',ffmpeg); }
+    await wait(5100);
+    for(let i=0;i<30;i++) {
+        const result=await request('PrivateSyncPlay/Guest/State',{guest:true,expected:null});
+        if(result.status===200 && result.data.ready)break;
+        assert([200,503].includes(result.status)); await wait(1000);
+        assert(i<29,'Guest stream did not recover after encoder restoration');
+    }
+    console.log('PASS encoder failure containment, no server/path exposure and guest isolation during recovery');
+    settings.maxGuestStreams=1;
+    await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
+    const primaryCookie=cookie;
+    await request('SyncPlay/Leave',{method:'POST',auth:friend,expected:204});
+    await request('PrivateSyncPlay/Groups',{method:'POST',auth:friend,body:{Name:'Overflow guest stream',Mode:1,MaxViewers:3}});
+    const overflow=(await request('PrivateSyncPlay/Invites',{method:'POST',auth:friend,body:{AllowGuests:true,MaxUses:1}})).data;
+    const overflowGuest=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:overflow.token},origin:true,expected:204});
+    cookie=overflowGuest.headers['set-cookie'][0].split(';')[0];
+    await request('SyncPlay/SetNewQueue',{method:'POST',auth:friend,body:{PlayingQueue:[item.id],PlayingItemPosition:0,StartPositionTicks:0},expected:204});
+    await request('Sessions/Playing',{method:'POST',auth:friend,body:{ItemId:item.id,PositionTicks:0,IsPaused:false,CanSeek:true,PlayMethod:'DirectPlay'},expected:204});
+    await request('SyncPlay/Unpause',{method:'POST',auth:friend,expected:204});
+    await request('PrivateSyncPlay/Guest/State',{guest:true,expected:503});
+    await request('SyncPlay/Leave',{method:'POST',auth:friend,expected:204});
+    cookie=primaryCookie;
+    await request('PrivateSyncPlay/Guest/State',{guest:true});
+    await request('PrivateSyncPlay/JoinCode',{method:'POST',auth:friend,body:{Code:me.party.code},expected:204});
+    console.log('PASS server-wide guest encoder cap without disrupting an existing stream');
     // Master disable must invalidate the active lease permanently.
     settings.enableGuestInvites=false;
     await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
@@ -231,6 +289,26 @@ try {
     assert.equal((await request('SyncPlay/List',{auth:friend})).data[0].groupId,publicGroup.groupId);
     await request('SyncPlay/Leave',{method:'POST',auth:admin,expected:204});
     console.log('PASS per-user guest/creation denies, stock creation defaults and public browsing');
+    if (withConsumer) {
+        const generated=(await request('WatchPartyExample/Invite',{method:'POST',auth:admin,body:{ServerBaseUrl:base,AllowGuests:true}})).data;
+        assert(generated.providerAvailable);
+        assert.equal(generated.clientType,'WatchPartyClient','Separate plugin must resolve its own typed adapter');
+        const link=new URL(generated.invite.inviteUrl);
+        assert.equal(link.pathname,'/PrivateSyncPlay/Watch'); assert.equal(link.hash.length,65);
+        assert.equal((await request('SyncPlay/List',{auth:friend})).data.length,0);
+        cookie=undefined;
+        const admission=await request('PrivateSyncPlay/Guest/Redeem',{method:'POST',body:{Token:link.hash.slice(1)},origin:true,expected:204});
+        cookie=admission.headers['set-cookie'][0].split(';')[0];
+        await request('PrivateSyncPlay/Guest/State',{guest:true});
+        await request(`WatchPartyExample/Invites/${generated.invite.inviteId}`,{method:'DELETE',auth:admin,expected:204});
+        await request('PrivateSyncPlay/Guest/State',{guest:true,expected:401});
+        await request('SyncPlay/Leave',{method:'POST',auth:admin,expected:204});
+        settings.enableGuestInvites=false;
+        await request(settingsPath,{method:'POST',auth:admin,body:settings,expected:204});
+        await request('WatchPartyExample/Invite',{method:'POST',auth:admin,body:{ServerBaseUrl:base,AllowGuests:true},expected:403});
+        assert.equal((await request('PrivateSyncPlay/Me',{auth:admin})).data.party ?? null,null,'Denied invitation must not leave a new party behind');
+        console.log('PASS isolated consumer plugin DI/client, on-behalf link, guest revocation and no permission bypass');
+    }
     await writeFile(join(root,'result.json'), JSON.stringify({passed:true,base,container:name},null,2));
     console.log('ALL INTEGRATION CHECKS PASSED');
 } catch(error) {

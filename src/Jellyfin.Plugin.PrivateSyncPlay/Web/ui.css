@@ -1,0 +1,20 @@
+/* Layout and inherited defaults only: Jellyfin and server/user skins own appearance. */
+.privateSyncPlayDialog { color: inherit; font: inherit; }
+.privateSyncPlayDialog:not([open]) { display: none; }
+.privateSyncPlayDialog[open] {
+    display: flex;
+    margin: auto;
+    inline-size: min(40em, calc(100vw - 2em));
+    max-block-size: calc(100dvh - 2em);
+}
+.privateSyncPlayDialog .formDialogContent { overflow: auto; }
+.privateSyncPlayDialog .dialogContentInner { padding-block-end: 1.5em; }
+.privateSyncPlayDialog .privateSyncPlayClose { margin-inline-start: auto; }
+.privateSyncPlayDialog .listItemBody { min-inline-size: 0; overflow-wrap: anywhere; }
+.privateSyncPlayGuest { margin: 0; }
+.privateSyncPlayGuest .privateSyncPlayContent { max-inline-size: 70em; margin-inline: auto; padding: 1.5em; }
+.privateSyncPlayGuest .privateSyncPlayVideo { inline-size: 100%; max-block-size: 70dvh; }
+.privateSyncPlayGuest [hidden] { display: none !important; }
+.privateSyncPlayGuest .privateSyncPlayActions { display: flex; flex-wrap: wrap; gap: .5em; }
+.privateSyncPlayGuest .privateSyncPlayActions > .emby-button { flex: 1 1 12em; }
+.privateSyncPlaySettings .privateSyncPlayUser { margin-block: 1.5em; }

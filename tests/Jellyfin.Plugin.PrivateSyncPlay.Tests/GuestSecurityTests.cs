@@ -41,6 +41,12 @@ public sealed class GuestSecurityTests
         Assert.Equal(401, Assert.Throws<PartyException>(() => Controller().State()).Status);
         Assert.Equal(401, Assert.Throws<PartyException>(() => Controller().Stream("anything", "index.m3u8")).Status);
     }
+    [Fact] public void SiblingSubdomainCannotReadGuestStateEvenWithACookie()
+    {
+        Assert.Equal(403, Assert.Throws<PartyException>(() => Controller(origin: "https://other.party.example").State()).Status);
+        var c = Controller(); c.Request.Headers.Remove("Origin"); c.Request.Headers["Sec-Fetch-Site"] = "same-site";
+        Assert.Equal(403, Assert.Throws<PartyException>(() => c.Stream("anything", "index.m3u8")).Status);
+    }
     [Fact] public void HostTokensAreNotAcceptedAsGuestCredentials()
     {
         var c = Controller();
@@ -63,7 +69,7 @@ public sealed class GuestSecurityTests
     }
     [Fact] public void AssetsUseAnExplicitAllowlist()
     {
-        var c = new AssetsController { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+        var c = new AssetsController(new NativeWebStyles(Mock.Of<IApplicationPaths>())) { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
         Assert.IsType<NotFoundResult>(c.Asset("../../Plugin.cs"));
         Assert.IsType<NotFoundResult>(c.Asset("settings.html"));
         Assert.IsType<FileStreamResult>(c.Asset("hls.js"));

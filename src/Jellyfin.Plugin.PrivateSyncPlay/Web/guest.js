@@ -10,6 +10,12 @@
     const join = document.getElementById('join');
     const leave = document.getElementById('leave');
     const signIn = document.getElementById('signin');
+    const mobile = window.matchMedia('(max-width: 50em)');
+    function layout() {
+        document.documentElement.classList.toggle('layout-mobile', mobile.matches);
+        document.documentElement.classList.toggle('layout-desktop', !mobile.matches);
+    }
+    mobile.addEventListener('change', layout); layout();
     let hls, generation, active = false, timer;
     const normalize = x => Array.isArray(x) ? x.map(normalize) : x && typeof x === 'object'
         ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k[0].toLowerCase() + k.slice(1), normalize(v)])) : x;
@@ -37,7 +43,13 @@
         try { await video.play(); play.hidden = true; } catch { play.hidden = false; }
     }
     play.onclick = enablePlayback;
-    document.getElementById('volume').oninput = e => { video.volume = Number(e.target.value); };
+    const volume = document.getElementById('volume');
+    volume.oninput = () => {
+        video.volume = Number(volume.value);
+        // Geometry only, matching Jellyfin's slider implementation; colors belong to the skin.
+        document.getElementById('volumeProgress').style.width = Number(volume.value) * 100 + '%';
+    };
+    volume.oninput();
     async function poll() {
         if (!active) return;
         try {

@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+
+const folder=process.argv[2] || 'artifacts';
+const catalog=JSON.parse(await readFile(join(folder,'manifest.json'),'utf8'));
+assert.equal(catalog.length,1);
+assert.equal(catalog[0].guid,'09514a9e-f7a0-4c5a-91bc-3a46338298ca');
+assert(catalog[0].versions.length>0,'Published catalog must contain a real version');
+const release=catalog[0].versions[0];
+assert.match(release.version,/^\d+\.\d+\.\d+\.0$/);
+assert.equal(release.targetAbi,'12.0.0.0');
+const url=new URL(release.sourceUrl); assert.equal(url.protocol,'https:');
+const filename=url.pathname.split('/').at(-1);
+assert.match(filename,/^PrivateSyncPlay-\d+\.\d+\.\d+\.zip$/);
+const checksum=createHash('md5').update(await readFile(join(folder,filename))).digest('hex');
+assert.equal(release.checksum,checksum,'Catalog checksum does not match its exact release ZIP');
+assert(Number.isFinite(Date.parse(release.timestamp)));
+assert((await readFile(join(folder,'PrivateSyncPlay.Api-1.0.0.zip'))).length>0);
+console.log('PASS plugin repository schema, ABI, release asset URL, real ZIP checksum and SDK archive');

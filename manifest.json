@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "09514a9e-f7a0-4c5a-91bc-3a46338298ca",
+    "name": "Private SyncPlay",
+    "category": "General",
+    "owner": "someRandomDude-a",
+    "description": "Private SyncPlay groups, limited invites and isolated temporary guest viewing for Jellyfin 12.",
+    "overview": "Native watch parties with administrator-controlled guest sharing and a versioned in-process API for other plugins.",
+    "versions": []
+  }
+]

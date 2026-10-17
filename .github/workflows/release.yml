@@ -1,0 +1,83 @@
+name: Publish Jellyfin repository
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag (vX.Y.Z) to release'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: private-syncplay-release
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm run test:ui
+      - run: dotnet test tests/Jellyfin.Plugin.PrivateSyncPlay.Tests -c Release
+      - run: dotnet build examples/WatchPartyConsumer -c Release
+      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-release-test" --with-consumer
+  publish:
+    needs: verify
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - name: Build verified catalog and release assets
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Use an existing vX.Y.Z tag' }
+          $previous = Join-Path $env:RUNNER_TEMP 'previous-catalog'
+          New-Item -ItemType Directory -Force $previous | Out-Null
+          $historyJson = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read release history; refusing to lose previous catalog entries' }
+          $history = @($historyJson | ConvertFrom-Json | ForEach-Object { $_ })
+          $stable = @($history | Where-Object { -not $_.draft -and -not $_.prerelease })
+          if ($stable.Count -gt 0) {
+            $latestJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read the current release catalog' }
+            $latest = $latestJson | ConvertFrom-Json
+            if (@($latest.assets | Where-Object { $_.name -eq 'manifest.json' }).Count -gt 0) {
+              gh release download $latest.tag_name --repo $env:GITHUB_REPOSITORY --pattern manifest.json --dir $previous
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot download the previous catalog' }
+            }
+          }
+          $manifest = Join-Path $previous 'manifest.json'
+          $args = @{ Version=$env:RELEASE_TAG.Substring(1); Repository=$env:GITHUB_REPOSITORY }
+          if (Test-Path $manifest) { $args.PreviousManifest = $manifest }
+          ./scripts/package.ps1 @args
+      - run: node scripts/validate-package.mjs
+      - name: Publish immutable version assets and stable latest catalog
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          gh release create $env:RELEASE_TAG "artifacts/PrivateSyncPlay-$version.zip" artifacts/PrivateSyncPlay.Api-1.0.0.zip artifacts/manifest.json --verify-tag --title "Private SyncPlay $version" --generate-notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release was not published; existing assets are never overwritten' }

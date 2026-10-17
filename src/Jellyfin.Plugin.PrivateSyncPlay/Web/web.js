@@ -1,96 +1,140 @@
-(() => {
+(async () => {
     'use strict';
     if (window.privateSyncPlayLoaded) return;
     window.privateSyncPlayLoaded = true;
     const root = new URL('../', document.currentScript.src);
-    let dialog, button;
+    const UI = await (window.privateSyncPlayUILoading ||= new Promise((resolve, reject) => {
+        if (window.PrivateSyncPlayUI) { resolve(window.PrivateSyncPlayUI); return; }
+        const script = document.createElement('script'); script.src = new URL('assets/ui.js', root).href;
+        script.onload = () => resolve(window.PrivateSyncPlayUI); script.onerror = reject; document.head.append(script);
+    }));
+    let current, launcher;
     const normalize = x => Array.isArray(x) ? x.map(normalize) : x && typeof x === 'object'
         ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k[0].toLowerCase() + k.slice(1), normalize(v)])) : x;
     function api() { return window.ApiClient; }
     async function request(path, method = 'GET', body) {
         if (!api()?.accessToken()) throw new Error('Sign in to Jellyfin first.');
         const result = await api().ajax({ url: api().getUrl(path), type: method,
-            data: body === undefined ? undefined : JSON.stringify(body), contentType: 'application/json', dataType: method === 'GET' || path.endsWith('/Invites') || path.endsWith('/Groups') ? 'json' : undefined });
+            data: body === undefined ? undefined : JSON.stringify(body), contentType: 'application/json',
+            dataType: method === 'GET' || path.endsWith('/Invites') || path.endsWith('/Groups') ? 'json' : undefined });
         return normalize(result);
     }
-    function element(tag, text, parent) { const e = document.createElement(tag); if (text) e.textContent = text; if (parent) parent.append(e); return e; }
-    function action(label, parent, run) {
-        const b = element('button', label, parent); b.type = 'button'; b.className = 'raised button-submit';
-        b.onclick = async () => { b.disabled = true; try { await run(); } catch (error) { alert(error.message || 'Request failed. Check your permissions and limits.'); } finally { b.disabled = false; } };
-        return b;
+    function error(message) {
+        if (!current?.dialog.open) { current = UI.dialog('Watch parties'); current.dialog.showModal(); }
+        UI.message(current.feedback, message, true);
     }
-    function field(label, type, value, parent) {
-        const row = element('label', label + ' ', parent); row.style.display = 'block'; row.style.margin = '1em 0';
-        const input = element('input', null, row); input.type = type; input.value = value; return input;
+    function action(label, parent, run, kind = 'default', id) {
+        const button = UI.button(label, parent, run, kind); if (id) button.dataset.pspAction = id; return button;
     }
+    function description(text, parent) { return UI.element('p', text, parent, 'fieldDescription'); }
     async function show() {
         const me = await request('PrivateSyncPlay/Me');
-        if (dialog) dialog.remove();
-        dialog = element('dialog', null, document.body);
-        Object.assign(dialog.style, { background: '#171b22', color: '#eee', padding: '2em', borderRadius: '12px', maxWidth: '550px', maxHeight: '85vh' });
-        element('h2', 'Watch parties', dialog);
-        action('Close', dialog, () => dialog.close());
+        const groups = me.party ? [] : await request('SyncPlay/List');
+        current?.dialog.close();
+        current = UI.dialog('Watch parties');
+        const { content, dialog, feedback } = current;
         if (me.party) {
-            element('p', `${me.party.mode} party · ${me.party.viewers}/${me.party.capacity} viewers`, dialog);
-            if (me.party.code) action('Copy join code', dialog, () => navigator.clipboard.writeText(me.party.code));
+            description(`${me.party.mode} party · ${me.party.viewers}/${me.party.capacity} viewers`, content);
+            if (me.party.code) action('Copy join code', content, async () => {
+                await navigator.clipboard.writeText(me.party.code); UI.message(feedback, 'Join code copied.');
+            });
             if (me.party.isOwner) {
-                const guests = field('Allow guests', 'checkbox', '', dialog); guests.disabled = !me.canInviteGuests || location.protocol !== 'https:';
-                if (!me.canInviteGuests) element('p', 'Guest invites are disabled by your administrator.', dialog);
-                else if (location.protocol !== 'https:') element('p', 'Open Jellyfin over HTTPS to create usable guest invite links.', dialog);
-                const uses = field('Maximum invite uses', 'number', me.maxInviteUses, dialog); uses.min = '1'; uses.max = me.maxInviteUses;
-                const expiry = field('Expires in minutes (optional)', 'number', '', dialog); expiry.min = '1';
-                action('Create invite link', dialog, async () => {
+                const guests = UI.field('Allow guests', 'checkbox', false, content);
+                guests.disabled = !me.canInviteGuests || location.protocol !== 'https:';
+                if (!me.canInviteGuests) description('Guest invites are disabled by your administrator.', content);
+                else if (location.protocol !== 'https:') description('Open Jellyfin over HTTPS to create usable guest invite links.', content);
+                const uses = UI.field('Maximum invite uses', 'number', me.maxInviteUses, content); uses.min = '1'; uses.max = me.maxInviteUses;
+                const expiry = UI.field('Expires in minutes (optional)', 'number', '', content); expiry.min = '1';
+                action('Create invite link', content, async () => {
+                    if (!uses.reportValidity() || !expiry.reportValidity()) return;
                     const invite = await request('PrivateSyncPlay/Invites', 'POST', { AllowGuests: guests.checked,
                         MaxUses: Number(uses.value), ExpiresAt: expiry.value ? new Date(Date.now() + Number(expiry.value) * 60000).toISOString() : null });
                     const url = new URL('Watch', root).href + '#' + invite.token;
-                    const output = field('Invite link — copy now', 'text', url, dialog); output.readOnly = true; output.select();
-                    action('Copy link', dialog, () => navigator.clipboard.writeText(url));
-                    action('Revoke this invite', dialog, async () => { await request('PrivateSyncPlay/Invites/' + invite.id, 'DELETE'); output.value = 'Revoked'; });
-                });
-                for (const invite of me.party.invites) {
-                    const row = element('p', `${invite.uses}/${invite.maxUses} uses · ${invite.allowGuests ? 'guests allowed' : 'accounts only'} `, dialog);
-                    action('Revoke', row, async () => { await request('PrivateSyncPlay/Invites/' + invite.id, 'DELETE'); row.remove(); });
+                    const output = UI.field('Invite link — copy now', 'text', url, content); output.readOnly = true; output.select();
+                    action('Copy link', content, async () => { await navigator.clipboard.writeText(url); UI.message(feedback, 'Invite link copied.'); });
+                    action('Revoke this invite', content, async () => {
+                        await request('PrivateSyncPlay/Invites/' + invite.id, 'DELETE'); output.value = 'Revoked'; UI.message(feedback, 'Invitation revoked.');
+                    }, 'delete');
+                }, 'primary', 'create-invite');
+                if (me.party.invites.length) {
+                    UI.element('h3', 'Invitations', content, 'sectionTitle');
+                    const list = UI.element('div', null, content, 'paperList');
+                    for (const invite of me.party.invites) {
+                        const row = UI.element('div', null, list, 'listItem listItem-border');
+                        const body = UI.element('div', null, row, 'listItemBody');
+                        UI.element('div', `${invite.uses}/${invite.maxUses} uses`, body, 'listItemBodyText');
+                        UI.element('div', invite.allowGuests ? 'Guests allowed' : 'Accounts only', body, 'listItemBodyText secondary');
+                        const revoke = action('Revoke', row, async () => { await request('PrivateSyncPlay/Invites/' + invite.id, 'DELETE'); row.remove(); });
+                        revoke.className = 'emby-button button-flat listItemButton';
+                    }
                 }
             }
-            action('Leave party', dialog, async () => { await request('SyncPlay/Leave', 'POST'); dialog.close(); });
+            action('Leave party', content, async () => { await request('SyncPlay/Leave', 'POST'); dialog.close(); }, 'default', 'leave-party');
         } else {
-            const groups = await request('SyncPlay/List');
-            for (const group of groups) action('Join ' + group.groupName, dialog, async () => {
-                await request('SyncPlay/Join', 'POST', { GroupId: group.groupId }); dialog.close();
-            });
-            const code = field('Private join code', 'text', '', dialog); code.maxLength = 8;
-            action('Join by code', dialog, async () => { await request('PrivateSyncPlay/JoinCode', 'POST', { Code: code.value.trim() }); dialog.close(); });
-            if (me.canCreatePublic || me.canCreatePrivate) {
-                element('h3', 'Create party', dialog);
-                const name = field('Name', 'text', 'Watch party', dialog); name.maxLength = 200;
-                const mode = element('select', null, dialog);
-                for (const value of ['Public', 'Private']) if (me['canCreate' + value]) {
-                    const option = element('option', value, mode); option.value = value === 'Public' ? '0' : '1'; option.selected = value === me.defaultMode;
+            if (groups.length) {
+                UI.element('h3', 'Public parties', content, 'sectionTitle');
+                const list = UI.element('div', null, content, 'paperList');
+                for (const group of groups) {
+                    const row = UI.element('div', null, list, 'listItem listItem-border');
+                    const body = UI.element('div', null, row, 'listItemBody'); UI.element('div', group.groupName, body, 'listItemBodyText');
+                    const join = action('Join', row, async () => { await request('SyncPlay/Join', 'POST', { GroupId: group.groupId }); dialog.close(); });
+                    join.className = 'emby-button button-flat listItemButton';
                 }
-                const capacity = field('Maximum simultaneous viewers (including you)', 'number', me.maxViewers, dialog);
-                capacity.min = '1'; capacity.max = me.maxViewers;
-                action('Create', dialog, async () => {
+            }
+            const code = UI.field('Private join code', 'text', '', content); code.maxLength = 8;
+            action('Join by code', content, async () => { await request('PrivateSyncPlay/JoinCode', 'POST', { Code: code.value.trim() }); dialog.close(); });
+            if (me.canCreatePublic || me.canCreatePrivate) {
+                UI.element('h3', 'Create party', content, 'sectionTitle');
+                const name = UI.field('Name', 'text', 'Watch party', content); name.maxLength = 200; name.required = true;
+                const choices = ['Public', 'Private'].filter(value => me['canCreate' + value])
+                    .map(value => ({ label: value, value: value === 'Public' ? '0' : '1' }));
+                const mode = UI.select('Group visibility', choices, me.defaultMode === 'Public' ? '0' : '1', content);
+                const capacity = UI.field('Maximum simultaneous viewers (including you)', 'number', me.maxViewers, content);
+                capacity.min = '1'; capacity.max = me.maxViewers; capacity.required = true;
+                action('Create', content, async () => {
+                    if (!name.reportValidity() || !capacity.reportValidity()) return;
                     await request('PrivateSyncPlay/Groups', 'POST', { Name: name.value, Mode: Number(mode.value), MaxViewers: Number(capacity.value) });
                     await show();
-                });
+                }, 'primary', 'create-party');
             }
         }
         dialog.showModal();
     }
     let pending = new URLSearchParams(location.hash.slice(1)).get('privateSyncPlayInvite');
     if (pending) history.replaceState(null, '', location.pathname + location.search);
-    // A standalone launcher avoids patching React internals and works in both web layouts.
-    setInterval(() => {
+    function refresh() {
         const signedIn = !!api()?.accessToken();
-        if (signedIn && !button) {
-            button = action('Watch parties', document.body, show);
-            Object.assign(button.style, { position: 'fixed', right: '1rem', bottom: '1rem', zIndex: '9999', padding: '.7rem', borderRadius: '6px' });
+        if (!signedIn) { launcher?.remove(); launcher = null; current?.dialog.close(); return; }
+        const native = ['button[aria-controls="app-sync-play-menu"]', '.headerSyncButton', '.btnSyncPlay',
+            '.skinHeader .headerRight button.paper-icon-button-light', 'header .MuiToolbar-root button.MuiIconButton-root']
+            .flatMap(selector => [...document.querySelectorAll(selector)])
+            .find(node => node !== launcher && !node.classList.contains('privateSyncPlayLauncher') && node.getClientRects().length);
+        if (native && (!launcher?.isConnected || launcher.parentNode !== native.parentNode)) {
+            launcher?.remove();
+            // Reuse the actual toolbar button's skin/MUI classes, but none of its React handlers.
+            launcher = native.cloneNode(false); launcher.removeAttribute('id'); launcher.removeAttribute('style');
+            launcher.classList.add('privateSyncPlayLauncher'); launcher.type = 'button';
+            launcher.title = 'Watch parties'; launcher.setAttribute('aria-label', 'Watch parties');
+            launcher.setAttribute('aria-haspopup', 'dialog'); launcher.setAttribute('aria-controls', 'privateSyncPlayDialog');
+            const svg = native.querySelector('svg')?.cloneNode(false);
+            if (svg) {
+                svg.setAttribute('aria-hidden', 'true'); svg.removeAttribute('data-testid');
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6M3 20v-3c0-4 12-4 12 0v3zM17 7h6v2h-6zM19 5h2v6h-2z');
+                svg.append(path); launcher.append(svg);
+            }
+            else UI.element('span', null, launcher, 'material-icons group_add').setAttribute('aria-hidden', 'true');
+            launcher.onclick = () => { void show().catch(e => error(e.message || 'Could not load watch parties.')); };
+            native.after(launcher);
         }
-        if (button) button.hidden = !signedIn;
-        if (!signedIn && dialog?.open) dialog.close();
-        if (signedIn && pending) {
+        if (pending) {
             const token = pending; pending = null;
-            void request('PrivateSyncPlay/JoinInvite', 'POST', { Token: token }).then(show).catch(() => alert('Invitation invalid, full, expired, or media access denied.'));
+            void request('PrivateSyncPlay/JoinInvite', 'POST', { Token: token }).then(show)
+                .catch(() => error('Invitation invalid, full, expired, or media access denied.'));
         }
-    }, 1000);
+    }
+    setInterval(refresh, 1000);
+    window.addEventListener('hashchange', () => current?.dialog.close());
+    window.addEventListener('popstate', () => current?.dialog.close());
+    refresh();
 })();
