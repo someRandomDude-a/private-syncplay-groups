@@ -31,7 +31,12 @@ jobs:
       - run: npm run test:ui
       - run: dotnet test tests/Jellyfin.Plugin.PrivateSyncPlay.Tests -c Release
       - run: dotnet build examples/WatchPartyConsumer -c Release
-      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-release-test" --with-consumer
+      - shell: pwsh
+        run: ./scripts/package.ps1
+      - run: node scripts/validate-package.mjs
+      - shell: pwsh
+        run: ./tests/catalog-publish.test.ps1
+      - run: node scripts/integration.mjs "${{ runner.temp }}/private-syncplay-release-test" --with-consumer --install-from-catalog
   publish:
     needs: verify
     runs-on: windows-latest
@@ -57,17 +62,26 @@ jobs:
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Use an existing vX.Y.Z tag' }
           $previous = Join-Path $env:RUNNER_TEMP 'previous-catalog'
           New-Item -ItemType Directory -Force $previous | Out-Null
-          $historyJson = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot read release history; refusing to lose previous catalog entries' }
-          $history = @($historyJson | ConvertFrom-Json | ForEach-Object { $_ })
-          $stable = @($history | Where-Object { -not $_.draft -and -not $_.prerelease })
-          if ($stable.Count -gt 0) {
-            $latestJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest"
-            if ($LASTEXITCODE -ne 0) { throw 'Cannot read the current release catalog' }
-            $latest = $latestJson | ConvertFrom-Json
-            if (@($latest.assets | Where-Object { $_.name -eq 'manifest.json' }).Count -gt 0) {
-              gh release download $latest.tag_name --repo $env:GITHUB_REPOSITORY --pattern manifest.json --dir $previous
-              if ($LASTEXITCODE -ne 0) { throw 'Cannot download the previous catalog' }
+          $refsJson = gh api "repos/$env:GITHUB_REPOSITORY/git/matching-refs/heads/catalog"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read catalog history; refusing to lose previous entries' }
+          $refs = @($refsJson | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object { $_.ref -eq 'refs/heads/catalog' })
+          if ($refs.Count -gt 0) {
+            $parent = $refs[0].object.sha
+            "CATALOG_PARENT=$parent" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            $oldJson = gh api "repos/$env:GITHUB_REPOSITORY/contents/manifest.json?ref=$parent"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read previous catalog' }
+            $old = $oldJson | ConvertFrom-Json
+            [IO.File]::WriteAllBytes((Join-Path $previous 'manifest.json'), [Convert]::FromBase64String($old.content))
+          } else {
+            # Preserve history when upgrading from the former release-asset-only repository.
+            $releasesJson = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read legacy release catalog history' }
+            $legacy = @($releasesJson | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object {
+              -not $_.draft -and -not $_.prerelease -and @($_.assets | Where-Object { $_.name -eq 'manifest.json' }).Count -gt 0
+            } | Select-Object -First 1)
+            if ($legacy.Count -gt 0) {
+              gh release download $legacy[0].tag_name --repo $env:GITHUB_REPOSITORY --pattern manifest.json --dir $previous
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot download legacy catalog history' }
             }
           }
           $manifest = Join-Path $previous 'manifest.json'
@@ -75,9 +89,12 @@ jobs:
           if (Test-Path $manifest) { $args.PreviousManifest = $manifest }
           ./scripts/package.ps1 @args
       - run: node scripts/validate-package.mjs
-      - name: Publish immutable version assets and stable latest catalog
+      - name: Publish immutable version release assets
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG.Substring(1)
           gh release create $env:RELEASE_TAG "artifacts/PrivateSyncPlay-$version.zip" artifacts/PrivateSyncPlay.Api-1.0.0.zip artifacts/manifest.json --verify-tag --title "Private SyncPlay $version" --generate-notes --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release was not published; existing assets are never overwritten' }
+      - name: Publish stable raw Jellyfin catalog after release assets exist
+        shell: pwsh
+        run: ./scripts/publish-catalog.ps1 -Repository $env:GITHUB_REPOSITORY -ParentCommit "$env:CATALOG_PARENT"

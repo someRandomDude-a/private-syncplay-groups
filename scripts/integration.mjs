@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 
 const root = resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || join(tmpdir(), 'opencode', 'private-syncplay-integration-' + Date.now()));
 const withConsumer = process.argv.includes('--with-consumer');
+const catalogInstall = process.argv.includes('--install-from-catalog');
 const resume = process.argv.find(x => x.startsWith('--resume='))?.slice(9);
+if (catalogInstall && resume) throw new Error('Catalog installation test requires a fresh disposable server');
 if (resume && !resume.startsWith('private-syncplay-integration-')) throw new Error('Refusing to reuse an unrelated container');
 const name = resume || 'private-syncplay-integration-' + process.pid;
 const image = 'jellyfin/jellyfin:12.2';
@@ -24,6 +26,7 @@ const docker = (...args) => command('docker', args);
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const normalize = x => Array.isArray(x) ? x.map(normalize) : x && typeof x === 'object'
     ? Object.fromEntries(Object.entries(x).map(([k,v]) => [k[0].toLowerCase()+k.slice(1), normalize(v)])) : x;
+const sameId = (a,b) => typeof a === 'string' && a.replaceAll('-','').toLowerCase() === b.replaceAll('-','').toLowerCase();
 // Plugin configuration is deserialized by Jellyfin separately from MVC and requires PascalCase.
 const pascal = x => Array.isArray(x) ? x.map(pascal) : x && typeof x === 'object'
     ? Object.fromEntries(Object.entries(x).map(([k,v]) => [k[0].toUpperCase()+k.slice(1), pascal(v)])) : x;
@@ -53,14 +56,29 @@ async function request(path, { method = 'GET', body, auth, guest = false, origin
 }
 
 let started = false;
+let repositoryStarted = false, networkStarted = false;
+const network = name + '-network', repository = name + '-repository';
 try {
     if (!resume) {
     await mkdir(join(root, 'config', 'config'), { recursive: true });
     await mkdir(join(root, 'config', 'plugins', 'PrivateSyncPlay'), { recursive: true });
     await mkdir(join(root, 'media'), { recursive: true });
     await mkdir(join(root, 'cache'), { recursive: true });
-    await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.dll'));
-    await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay.Api/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.Api.dll'));
+    if (!catalogInstall) {
+        await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.dll'));
+        await copyFile('src/Jellyfin.Plugin.PrivateSyncPlay.Api/bin/Release/net10.0/Jellyfin.Plugin.PrivateSyncPlay.Api.dll', join(root, 'config', 'plugins', 'PrivateSyncPlay', 'Jellyfin.Plugin.PrivateSyncPlay.Api.dll'));
+    } else {
+        const catalog=JSON.parse(await readFile('artifacts/manifest.json','utf8'));
+        const entry=catalog[0].versions[0], file=new URL(entry.sourceUrl).pathname.split('/').at(-1);
+        await mkdir(join(root,'repository'),{recursive:true});
+        await copyFile(join('artifacts',file),join(root,'repository',file));
+        // Only the URL changes for the isolated test; ZIP bytes and checksum are the release package's.
+        entry.sourceUrl=`http://repository/${file}`;
+        await writeFile(join(root,'repository','manifest.json'),JSON.stringify(catalog));
+        docker('network','create',network); networkStarted=true;
+        docker('run','-d','--name',repository,'--network',network,'--network-alias','repository',
+            '-v',`${join(root,'repository')}:/usr/share/nginx/html:ro`,'nginx:alpine'); repositoryStarted=true;
+    }
     if (withConsumer) {
         const folder=join(root,'config','plugins','WatchPartyConsumer'); await mkdir(folder,{recursive:true});
         await copyFile('examples/WatchPartyConsumer/bin/Release/net10.0/WatchPartyConsumer.dll',join(folder,'WatchPartyConsumer.dll'));
@@ -78,17 +96,18 @@ try {
         '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440',
         '-t', '180', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '/test/media/Party Test.mp4');
     docker('run', '-d', '--name', name, '-p', '127.0.0.1::8096', '-p', '127.0.0.1::8920',
+        ...(catalogInstall ? ['--network',network] : []),
         '-v', `${join(root,'config')}:/config`, '-v', `${join(root,'cache')}:/cache`, '-v', `${join(root,'media')}:/media:ro`, image);
     } else { docker('restart', name); }
     started = true;
     const port = docker('port', name, '8096/tcp').split(':').at(-1);
-    const tlsPort = docker('port', name, '8920/tcp').split(':').at(-1);
+    let tlsPort = docker('port', name, '8920/tcp').split(':').at(-1);
     base = `http://127.0.0.1:${port}`;
     let ready = false;
     for (let i = 0; i < 120; i++) {
         try {
-            const r = await request('PrivateSyncPlay/assets/web.js', { expected: null });
-            if (r.status === 200 && typeof r.data === 'string' && r.data.includes('privateSyncPlayLoaded')) { ready = true; break; }
+            const r = await request(catalogInstall ? 'Startup/Configuration' : 'PrivateSyncPlay/assets/web.js', { expected: null });
+            if (r.status === 200 && (catalogInstall || typeof r.data === 'string' && r.data.includes('privateSyncPlayLoaded'))) { ready = true; break; }
         } catch { }
         await wait(1000);
     }
@@ -107,6 +126,30 @@ try {
         return { token:r.data.accessToken, device, user:r.data.user };
     }
     const admin = await login('party-admin','host');
+    if(catalogInstall) {
+        const id='09514a9e-f7a0-4c5a-91bc-3a46338298ca';
+        assert(!(await request('Plugins',{auth:admin})).data.some(p=>sameId(p.id,id)),'Plugin must not be preinstalled for catalog test');
+        await request('Repositories',{method:'POST',auth:admin,body:[{Name:'Private SyncPlay test repository',Url:'http://repository/manifest.json',Enabled:true}],expected:204});
+        const packages=(await request('Packages',{auth:admin})).data;
+        const plugin=packages.find(p=>sameId(p.guid || p.id,id));
+        assert(plugin,`Jellyfin must discover the plugin from manifest.json: ${JSON.stringify(packages)}`);
+        const version=plugin.versions[0].version;
+        await request(`Packages/Installed/Private%20SyncPlay?assemblyGuid=${id}&version=${version}`,{method:'POST',auth:admin,expected:204});
+        for(const file of ['Jellyfin.Plugin.PrivateSyncPlay.dll','Jellyfin.Plugin.PrivateSyncPlay.Api.dll','meta.json'])
+            docker('exec',name,'test','-f',`/config/plugins/Private SyncPlay_${version}/${file}`);
+        docker('restart',name);
+        base=`http://127.0.0.1:${docker('port',name,'8096/tcp').split(':').at(-1)}`;
+        tlsPort=docker('port',name,'8920/tcp').split(':').at(-1);
+        let loaded=false;
+        for(let i=0;i<120;i++) {
+            try { if((await request('PrivateSyncPlay/assets/web.js',{expected:null})).status===200) { loaded=true; break; } } catch { }
+            await wait(1000);
+        }
+        assert(loaded,'Catalog-installed plugin must load after restart');
+        const installed=(await request('Plugins',{auth:admin})).data.find(p=>sameId(p.id,id));
+        assert(installed && installed.version===version,'Installed plugin must report the catalog version');
+        console.log('PASS real Jellyfin repository discovery, checksum-verified ZIP install, versioned folder, metadata and restart');
+    }
     if (!(await request('Users',{auth:admin})).data.some(u=>u.name==='party-friend'))
         await request('Users/New', { method:'POST', auth:admin, body:{ Name:'party-friend', Password:password } });
     const friend = await login('party-friend','friend');
@@ -319,5 +362,7 @@ try {
     throw error;
 } finally {
     if(started && !keep) docker('rm','-f',name);
+    if(repositoryStarted && !keep) docker('rm','-f',repository);
+    if(networkStarted && !keep) docker('network','rm',network);
     if(started && keep) console.log('Test container retained:',name);
 }

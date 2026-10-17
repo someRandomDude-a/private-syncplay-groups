@@ -20,15 +20,17 @@ Native .NET 10 plugin with private SyncPlay groups, limited invite links, admini
 Once the first tagged release has been published, add this stable repository URL:
 
 ```text
-https://github.com/someRandomDude-a/private-syncplay-groups/releases/latest/download/manifest.json
+https://raw.githubusercontent.com/someRandomDude-a/private-syncplay-groups/catalog/manifest.json
 ```
 
-1. Open **Dashboard → Plugins → Repositories** (or **Manage Repositories**).
-2. Add a repository named **Private SyncPlay** using the URL above, then save.
-3. Refresh the **Catalog**, select **Private SyncPlay**, and install the compatible Jellyfin 12 version.
+1. Sign in as an administrator. Open **Dashboard → Plugins → Repositories** (or **Manage Repositories**).
+2. Choose **+**, enter **Private SyncPlay** as the repository name and the complete URL above as its URL, enable it, then **Save**.
+3. Open/refresh the **Catalog**, select **Private SyncPlay** in **General**, choose the compatible Jellyfin 12 version, and **Install**.
 4. **Restart Jellyfin**, then configure **Dashboard → Plugins → Private SyncPlay**.
 
-The release catalog contains real ZIP checksums and preserves previous published versions for Jellyfin's compatibility selection. GitHub release assets must be publicly accessible to your server. The repository URL will return 404 until a maintainer publishes the first release; adding a workflow does not publish it automatically.
+This follows Jellyfin's [third-party repository method](https://jellyfin.org/docs/general/server/plugins/#repositories): the repository URL serves a JSON array of plugin packages, not a GitHub page or a ZIP. Each version points to its immutable release ZIP and the MD5 checksum Jellyfin requires. The `catalog` branch preserves previous published versions, independently of GitHub's latest-release selection. GitHub/raw content and release assets must be publicly accessible to the server. **The URL returns 404 until the first release and catalog publication succeed; nothing has been published by this coding session.**
+
+Do not add the SDK ZIP, a GitHub `/blob/…` page, the source metadata file, or a local filesystem path as a repository. If no plugin appears, check that the URL returns JSON with a nonempty `versions` array, the repository is enabled, the server is Jellyfin 12, and its network can reach GitHub. Jellyfin logs manifest/download/checksum failures. This catalog is not compatible with Jellyfin 10.x.
 
 For manual installation, download **`PrivateSyncPlay-X.Y.Z.zip`** from [GitHub Releases](https://github.com/someRandomDude-a/private-syncplay-groups/releases), extract it into a `PrivateSyncPlay` folder inside Jellyfin's plugins directory, and restart. Keep **both** `Jellyfin.Plugin.PrivateSyncPlay.dll` and `Jellyfin.Plugin.PrivateSyncPlay.Api.dll` together. The separate `PrivateSyncPlay.Api-1.0.0.zip` asset is a developer SDK, not a Jellyfin catalog plugin.
 
@@ -50,13 +52,15 @@ Configure **Dashboard → Plugins → Private SyncPlay**. Use the **Watch partie
 
 Guest links must be created and opened over **HTTPS**. The web controls disable guest-link creation on an HTTP connection; account-only invitations remain available.
 
-`scripts/package.ps1` generates `artifacts/manifest.json` using the exact ZIP's checksum and also packages the developer SDK. Root `manifest.json` contains catalog metadata with an empty version list, intentionally avoiding fabricated checksums or unpublished install entries. **Use the release catalog URL above, not the metadata template's raw URL**, in Jellyfin.
+`scripts/package.ps1` generates the installable `artifacts/manifest.json` using the exact ZIP's checksum and also packages the developer SDK. `scripts/plugin-metadata.json` is **build input only**, not a repository; there is deliberately no empty root manifest pretending to be installable. Use the published raw `catalog/manifest.json` URL above in Jellyfin.
+
+The packaging contract is checked against Jellyfin 12.2's [installer](https://github.com/jellyfin/jellyfin/blob/v12.2/Emby.Server.Implementations/Updates/InstallationManager.cs): four-component plugin/ABI versions, matching plugin GUID, direct `.zip` URL, MD5 of the exact ZIP, and plugin DLLs at the archive root. Jellyfin creates the versioned plugin directory and local `meta.json` during installation; the repository manifest is **not** copied into the plugins folder. MD5 is Jellyfin's integrity check, not a digital signature—only add repositories you trust.
 
 ### Publishing a release (maintainers)
 
-Commit the source changes, create a version tag such as `v0.1.0`, and push the tag. `.github/workflows/release.yml` verifies .NET/UI tests and a real Jellyfin Docker integration with a separate consumer plugin before publishing the plugin ZIP, SDK ZIP and installable manifest to that GitHub release. The stable `/releases/latest/download/manifest.json` URL then serves the new catalog. Existing release assets are not overwritten. Alternatively, run the release workflow manually with an **existing** `vX.Y.Z` tag.
+Commit the source changes, create a version tag such as `v0.1.0`, and push the tag. `.github/workflows/release.yml` verifies .NET/UI tests and installs the packaged ZIP through a real Jellyfin Docker server's repository API, then tests the plugin and a separate API consumer. It publishes the plugin ZIP, SDK ZIP and manifest to that GitHub release **before** updating `manifest.json` on the dedicated `catalog` branch. No GitHub Pages setup is needed. The workflow needs `contents: write` permission and permission to create/update that branch. Existing release assets and catalog versions are not overwritten. Alternatively, run the release workflow manually with an **existing** `vX.Y.Z` tag.
 
-The workflow merges the previous published catalog; local packaging can do the same with `./scripts/package.ps1 -Version X.Y.Z -PreviousManifest path/to/previous-manifest.json`. Local packaging alone never creates a GitHub release. Nothing has been published by this coding session.
+The workflow merges the previous published catalog; local packaging can do the same with `./scripts/package.ps1 -Version X.Y.Z -PreviousManifest path/to/previous-manifest.json`. Reusing a version already in that catalog is rejected. Local packaging alone never creates a GitHub release or updates the catalog branch. If release creation succeeds but catalog publication fails (for example, branch protection), fix the permission and publish the **existing release's manifest**, not a rebuilt ZIP, with `scripts/publish-catalog.ps1`; supply the current catalog commit as `-ParentCommit` when the branch exists. The old catalog remains usable until the new one is published.
 
 ### Native UI and skin compatibility
 
@@ -163,6 +167,8 @@ To run the automated disposable-server test yourself, with Docker running:
 dotnet build src/Jellyfin.Plugin.PrivateSyncPlay -c Release
 node scripts/integration.mjs
 ```
+
+To test the actual repository/ZIP installation path (also run in CI): build `examples/WatchPartyConsumer`, run `scripts/package.ps1`, then `node scripts/integration.mjs --with-consumer --install-from-catalog`. This starts a temporary nginx repository on a dedicated Docker network, installs through Jellyfin's `Repositories`/`Packages` APIs, verifies the DLLs and generated `meta.json` in its versioned plugin folder, restarts Jellyfin, and runs the playback/security tests. The test repository changes only the package's URL to its Docker-local fixture; its ZIP bytes and MD5 remain those of the generated release package. No public release is required for this local test.
 
 It uses the official `jellyfin/jellyfin:12.2` image, creates only new test data under the temporary directory, exposes randomly assigned **loopback-only** ports, generates a synthetic video and short-lived self-signed certificate, and removes its own container afterward. It does not mount or modify existing server data. The self-signed certificate exception applies only to the script's test HTTP client. Test data/diagnostics remain in the printed temporary folder. CI runs both this test and the unit tests.
 
