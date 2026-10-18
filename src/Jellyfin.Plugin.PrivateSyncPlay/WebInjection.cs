@@ -29,6 +29,10 @@ public sealed class WebInjection(PluginStatus? status = null) : IStartupFilter
             var index = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
             var version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown";
             if (index >= 0) html = html.Insert(index, $"<script defer src=\"../PrivateSyncPlay/assets/web.js?v={Uri.EscapeDataString(version)}\"></script>");
+            // Must run before native scripts register window capture listeners. A late/bubbling guard is too late.
+            var head = System.Text.RegularExpressions.Regex.Match(html, @"<head\b[^>]*>", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (head.Success) html = html.Insert(head.Index + head.Length,
+                $"<script src=\"../PrivateSyncPlay/assets/input-guard.js?v={Uri.EscapeDataString(version)}\"></script>");
             var bytes = Encoding.UTF8.GetBytes(html);
             context.Response.ContentLength = bytes.Length;
             context.Response.Headers.Remove("ETag");

@@ -61,7 +61,7 @@ Extract `artifacts/PrivateSyncPlay-0.1.3.zip` into a new `PrivateSyncPlay` subdi
 
 Configure **Dashboard → Plugins → Private SyncPlay**. Use the **Watch parties** toolbar button in Jellyfin Web to create a party, select its mode and concurrent-viewer cap, join by code, and manage invitations. The usual SyncPlay controls continue to handle signed-in playback.
 
-While a party/invitation dialog is open, typing and scrolling stay in that dialog instead of triggering player shortcuts or volume commands. Normal text entry, tab navigation, Escape and scrolling are preserved; player shortcuts resume after all party dialogs close.
+While a party/invitation dialog is open, typing and scrolling stay in that dialog instead of triggering player shortcuts or volume commands. An early input guard loads before Jellyfin's scripts, intercepting window capture handlers rather than relying on dialog bubbling. Normal text entry, tab navigation, Escape and scrolling are preserved; player shortcuts resume after all party dialogs close. After updating the plugin, restart Jellyfin and reload existing web tabs to load this early guard.
 
 Guest links must be created and opened over **HTTPS**. The web controls disable guest-link creation on an HTTP connection; account-only invitations remain available.
 

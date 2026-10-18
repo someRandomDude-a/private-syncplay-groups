@@ -6,7 +6,7 @@
     "hls.js": "1.6.13"
   },
   "scripts": {
-    "check": "node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/web.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/ui.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/account.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/watch-entry.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest-player.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest-preview.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/player-designer.js",
+    "check": "node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/input-guard.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/web.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/ui.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/account.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/watch-entry.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest-player.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/guest-preview.js && node --check src/Jellyfin.Plugin.PrivateSyncPlay/Web/player-designer.js",
     "test:ui": "node --test tests/ui/*.test.mjs"
   },
   "devDependencies": {

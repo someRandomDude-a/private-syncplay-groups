@@ -21,7 +21,7 @@ public sealed class WebInjectionTests
         {
             context.Response.StatusCode = 200;
             context.Response.ContentType = "text/html";
-            await context.Response.Body.WriteAsync(Encoding.UTF8.GetBytes("<html><body>Jellyfin</body></html>"));
+            await context.Response.Body.WriteAsync(Encoding.UTF8.GetBytes("<html><head><script src=\"native-player.js\"></script></head><body>Jellyfin</body></html>"));
         }))(builder);
         var context = new DefaultHttpContext();
         context.Request.Method = "GET";
@@ -30,7 +30,11 @@ public sealed class WebInjectionTests
         await builder.Build()(context);
         var html = Encoding.UTF8.GetString(output.ToArray());
         if (enabled)
+        {
             Assert.Contains("web.js?v=" + typeof(Plugin).Assembly.GetName().Version, html);
-        else Assert.DoesNotContain("PrivateSyncPlay/assets/web.js", html);
+            Assert.Contains("<head><script src=\"../PrivateSyncPlay/assets/input-guard.js?v=" + typeof(Plugin).Assembly.GetName().Version, html);
+            Assert.True(html.IndexOf("input-guard.js", StringComparison.Ordinal) < html.IndexOf("native-player.js", StringComparison.Ordinal));
+        }
+        else { Assert.DoesNotContain("PrivateSyncPlay/assets/web.js", html); Assert.DoesNotContain("input-guard.js", html); }
     }
 }
