@@ -18,6 +18,7 @@ public sealed class PartyStore(TimeProvider clock)
     private readonly Dictionary<string, (DateTimeOffset Start, int Count)> _attempts = [];
     // Raised after revocation, under Gate. GuestMedia owns the one stream for this party.
     internal event Action<Guid>? GuestAccessEnded;
+    internal event Action<Party, Guest>? GuestJoined;
     public DateTimeOffset Now => clock.GetUtcNow();
     public static string Secret() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private static string Digest(string secret) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secret)));
@@ -100,9 +101,11 @@ public sealed class PartyStore(TimeProvider clock)
         // A browser gets one party-scoped lease; switching must not strand its old seat.
         Guest? replaced = null;
         if (existing is not null) _guests.Remove(Digest(existing), out replaced);
-        _guests.Add(Digest(secret), new Guest(party.Id, invite.Id, Now));
+        var guest = new Guest(party.Id, invite.Id, Now, ++party.LastGuestNumber);
+        _guests.Add(Digest(secret), guest);
         invite.Uses++;
         if (replaced is not null) StopIfNoGuests(replaced.PartyId);
+        GuestJoined?.Invoke(party, guest);
         return secret;
     }
 
@@ -191,6 +194,7 @@ public sealed class PartyStore(TimeProvider clock)
 
 public sealed class Party(Guid id, Guid owner, string hostSession, GroupMode mode, string code, int capacity)
 {
+    internal long LastGuestNumber { get; set; }
     public Guid Id { get; } = id;
     public Guid Owner { get; } = owner;
     public string HostSession { get; } = hostSession;
@@ -226,8 +230,9 @@ public sealed class Invite(Guid id, Guid partyId, bool guests, int maxUses, Date
     public int Uses { get; set; }
     public DateTimeOffset? ExpiresAt { get; } = expiresAt;
 }
-public sealed class Guest(Guid partyId, Guid inviteId, DateTimeOffset lastSeen)
+public sealed class Guest(Guid partyId, Guid inviteId, DateTimeOffset lastSeen, long number)
 {
+    public string Name { get; } = "Guest " + number.ToString(System.Globalization.CultureInfo.InvariantCulture);
     public Guid Id { get; } = Guid.NewGuid();
     public Guid PartyId { get; } = partyId;
     public Guid InviteId { get; } = inviteId;

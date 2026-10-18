@@ -17,7 +17,7 @@ internal static class PartyManagementSnapshot
         }).ToArray();
         var allowed = GuestPlayerPolicy.Features.Where(config.GuestPlayer.Allows).ToArray();
         var leases = store.Guests(party.Id);
-        var guests = leases.Select(g => new WatchPartyGuestParticipant(g.Id, "Guest " + g.Id.ToString("N")[..6], leases.Count(other => other.InviteId == g.InviteId))).ToArray();
+        var guests = leases.Select(g => new WatchPartyGuestParticipant(g.Id, g.Name, leases.Count(other => other.InviteId == g.InviteId))).ToArray();
         var blocked = party.Accounts.Values.Where(a => party.BlockedUsers.Contains(a.UserId))
             .Select(a => new WatchPartyBlockedAccount(a.Id, users.GetUserById(a.UserId)?.Username ?? "Removed account")).ToArray();
         var policy = new WatchPartyPolicy(party.Policy.AllowJoins, party.Policy.AllowGuests, party.Policy.ParticipantsControlPlayback,

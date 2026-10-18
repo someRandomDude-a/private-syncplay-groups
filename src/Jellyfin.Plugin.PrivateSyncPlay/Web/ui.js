@@ -4,6 +4,12 @@
     if (window.PrivateSyncPlayUI) return;
     const assets = new URL('./', document.currentScript.src);
     let sequence = 0;
+    // Native inputManager commands can originate on window even when a modal owns focus.
+    window.addEventListener('command', event => {
+        if (document.querySelector('.privateSyncPlayDialog[open]')) {
+            event.preventDefault(); event.stopImmediatePropagation();
+        }
+    }, true);
     function element(tag, text, parent, className) {
         const node = document.createElement(tag);
         if (text != null) node.textContent = text;
@@ -79,6 +85,8 @@
         const focus = document.activeElement;
         const d = element('dialog', null, document.body, 'dialog formDialog privateSyncPlayDialog');
         d.id = 'privateSyncPlayDialog';
+        // Keep normal typing, selection, Tab/Escape and default scrolling; only stop leakage to player handlers.
+        for (const type of ['keydown','keyup','keypress','wheel']) d.addEventListener(type, event => event.stopPropagation());
         const header = element('div', null, d, 'formDialogHeader');
         const h = element('h2', title, header, 'formDialogHeaderTitle'); h.id = 'privateSyncPlayTitle'; d.setAttribute('aria-labelledby', h.id);
         const close = button('Close', header, () => d.close()); close.className = 'emby-button button-flat privateSyncPlayClose';

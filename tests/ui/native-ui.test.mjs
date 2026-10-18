@@ -69,6 +69,36 @@ test('shared plugin CSS has no fixed palette, font, floating launcher or global 
     assert.doesNotMatch(web,/\balert\(|Object\.assign\([^)]*style/);
     assert.match(web,/cloneNode\(false\)/);
 });
+test('party dialogs isolate typing and scrolling from player shortcuts without cancelling default input behavior',()=>{
+    const dom=page(), w=dom.window, {document,PrivateSyncPlayUI:UI}=w;
+    try {
+        const d=UI.dialog('Invitation');d.dialog.setAttribute('open','');
+        const field=UI.field('Party name','text','',d.content);
+        let playerKeys=0,playerWheels=0,commands=0,targetKeys=0;
+        document.addEventListener('keydown',()=>playerKeys++);document.addEventListener('keyup',()=>playerKeys++);
+        document.addEventListener('wheel',()=>playerWheels++);
+        w.addEventListener('command',()=>commands++);
+        field.addEventListener('keydown',()=>targetKeys++);
+        for(const key of ['m','f',' ','ArrowUp','ArrowDown','Tab','Escape']){
+            const event=new w.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});
+            field.dispatchEvent(event);assert(!event.defaultPrevented,'Typing, browser focus/navigation and escape must retain their defaults');
+            field.dispatchEvent(new w.KeyboardEvent('keyup',{key,bubbles:true}));
+        }
+        const wheel=new w.WheelEvent('wheel',{deltaY:80,bubbles:true,cancelable:true});
+        d.content.dispatchEvent(wheel);assert(!wheel.defaultPrevented,'Scrolling remains a normal browser action');
+        assert.equal(playerKeys,0);assert.equal(playerWheels,0);assert.equal(targetKeys,7);
+        for(const target of [field,document.body,w]){
+            const command=new w.CustomEvent('command',{detail:{command:'togglemute'},bubbles:true,cancelable:true});
+            target.dispatchEvent(command);assert(command.defaultPrevented,'Native inputManager must see the command as handled');
+        }
+        assert.equal(commands,0);
+        const nested=UI.dialog('Confirm');nested.dialog.setAttribute('open','');d.dialog.remove();
+        assert(!windowDispatch('volumeup'));
+        nested.dialog.remove();assert(windowDispatch('togglemute'));assert.equal(commands,1);
+        document.body.dispatchEvent(new w.KeyboardEvent('keydown',{key:'m',bubbles:true}));assert.equal(playerKeys,1);
+        function windowDispatch(command){return w.dispatchEvent(new w.CustomEvent('command',{detail:{command},cancelable:true}));}
+    } finally {dom.window.close();}
+});
 test('guest player and settings page retain native hooks without loading the normal app', async () => {
     const html=await readFile(new URL('guest.html',directory),'utf8');
     const dom=new JSDOM(html);

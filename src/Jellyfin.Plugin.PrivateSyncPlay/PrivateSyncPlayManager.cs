@@ -28,6 +28,7 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         Status = status ?? new PluginStatus();
         _logger = logger ?? NullLogger<PrivateSyncPlayManager>.Instance;
         _sessions.SessionEnded += SessionEnded;
+        _store.GuestJoined += GuestJoined;
     }
 
     public GroupInfoDto NewGroup(SessionInfo session, NewGroupRequest request, CancellationToken cancellationToken)
@@ -250,7 +251,26 @@ public sealed class PrivateSyncPlayManager : ISyncPlayManager, IDisposable
         }
     }
     private void SessionEnded(object? sender, SessionEventArgs e) { lock (_store.Gate) _store.RemoveSession(e.SessionInfo.Id); }
-    public void Dispose() => _sessions.SessionEnded -= SessionEnded;
+    private void GuestJoined(Party party, Guest guest)
+    {
+        // Notification only: guests never become core SyncPlay sessions or buffering participants.
+        try
+        {
+            foreach (var session in _sessions.Sessions.Where(s => party.IsMember(s.Id, s.UserId)).ToArray())
+                _ = NotifyGuestJoined(session.Id, party.Id, guest.Name);
+        }
+        catch (Exception error) { _logger.LogWarning("Guest join notification failed ({ErrorType}).", error.GetType().Name); }
+    }
+    private async Task NotifyGuestJoined(string session, Guid party, string name)
+    {
+        try { await _sessions.SendSyncPlayGroupUpdate(session, new SyncPlayUserJoinedUpdate(party, name), CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception error) { _logger.LogWarning("Guest join notification failed ({ErrorType}).", error.GetType().Name); }
+    }
+    public void Dispose()
+    {
+        _sessions.SessionEnded -= SessionEnded;
+        _store.GuestJoined -= GuestJoined;
+    }
 }
 
 // Retains the actual registered core instance without a second SyncPlay engine or circular DI.

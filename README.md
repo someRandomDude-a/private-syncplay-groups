@@ -15,6 +15,7 @@ Native .NET 10 plugin with private SyncPlay groups, limited invite links, admini
 - Party-wide concurrent viewer limits count all signed-in sessions (including the host) and guest sessions, regardless of join method. Invite-use limits count successful new admissions; refreshing an existing lease does not consume another use.
 - Administrator master switch and per-user Inherit/Allow/Deny for guest invitations. Server disable always wins. Revocation affects active guest leases as well as new admissions.
 - **Guests never keep a party alive.** The last signed-in participant leaving or disconnecting destroys all party invitations and guest leases. Another signed-in member may keep the party alive after its creator leaves.
+- New guests are labelled **Guest 1**, **Guest 2**, and so on within their party. Labels stay stable for each lease and are not reused after departure. Signed-in party members receive Jellyfin's native SyncPlay user-joined notification; reconnecting an existing guest does not announce another join. Guests remain outside core SyncPlay membership/waiting.
 - State is in memory: restarting Jellyfin expires groups, links and guests. Disabling private creation does not publish existing private groups.
 
 ## Install from Jellyfin's plugin catalog
@@ -59,6 +60,8 @@ dotnet test tests/Jellyfin.Plugin.PrivateSyncPlay.Tests -c Release
 Extract `artifacts/PrivateSyncPlay-0.1.3.zip` into a new `PrivateSyncPlay` subdirectory inside Jellyfin's plugins directory, keeping both packaged DLLs together, then restart Jellyfin. Do not install the separate developer SDK archive as a plugin or copy Jellyfin server assemblies into that directory. The package embeds its web scripts and hls.js, whose license is included.
 
 Configure **Dashboard → Plugins → Private SyncPlay**. Use the **Watch parties** toolbar button in Jellyfin Web to create a party, select its mode and concurrent-viewer cap, join by code, and manage invitations. The usual SyncPlay controls continue to handle signed-in playback.
+
+While a party/invitation dialog is open, typing and scrolling stay in that dialog instead of triggering player shortcuts or volume commands. Normal text entry, tab navigation, Escape and scrolling are preserved; player shortcuts resume after all party dialogs close.
 
 Guest links must be created and opened over **HTTPS**. The web controls disable guest-link creation on an HTTP connection; account-only invitations remain available.
 
